@@ -4,33 +4,90 @@ Add your UI elements here.
 """
 
 from bisect import bisect_left
-
+from pathlib import Path
 from nicegui import ui
-from ui.path_picker import pick_file
+from ui.path_picker import pick_file, pick_file_or_folder
 from api.beat_detection import detect_beats_and_downbeats
 
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
+VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
 
 TIMELINE_HEIGHT_PX = 3800
 MARKER_MATCH_TOLERANCE = 0.05  # seconds; used to test "is this beat also a downbeat/marker"
+
+
+def _scan_videos(folder: Path) -> list[Path]:
+    """Return video/audio files directly inside ``folder``, sorted by name."""
+    try:
+        entries = [
+            e for e in folder.iterdir()
+            if e.is_file() and e.suffix.lower() in VIDEO_EXTENSIONS
+        ]
+    except (PermissionError, OSError):
+        return []
+    return sorted(entries, key=lambda e: e.name.lower())
 
 
 @ui.page('/')
 def main_page():
     """Main page with toolbar and file picker."""
 
-    # Label to display the selected file path
     selected_path_label = None
-
-    # Container for beat detection results
     results_container = None
+    library_list = None
+    library_files: list[Path] = []
+    active_path = {'value': None}
+
+    def select_library_file(path: Path):
+        active_path['value'] = str(path)
+        selected_path_label.set_text(str(path))
+        render_library()
+        handle_audio_file(str(path), results_container)
+
+    def render_library():
+        library_list.clear()
+        with library_list:
+            if not library_files:
+                ui.label('No videos yet').classes('text-sm text-gray-400 italic p-2')
+            for video in library_files:
+                btn = ui.button(
+                    video.name,
+                    icon='movie',
+                    on_click=lambda v=video: select_library_file(v),
+                ).props('flat dense no-caps align=left').classes('w-full justify-start text-left')
+                if active_path['value'] == str(video):
+                    btn.classes('bg-blue-100 text-blue-800')
+                btn.tooltip(str(video))
+
+    async def on_add_to_library():
+        path_str = await pick_file_or_folder(extensions=VIDEO_EXTENSIONS)
+        if not path_str:
+            return
+        path = Path(path_str)
+        existing = {str(v) for v in library_files}
+        if path.is_dir():
+            for video in _scan_videos(path):
+                if str(video) not in existing:
+                    library_files.append(video)
+        elif path.is_file() and str(path) not in existing:
+            library_files.append(path)
+        library_files.sort(key=lambda e: e.name.lower())
+        render_library()
+
+
+    # Left sidebar: video library
+    with ui.left_drawer(value=True).classes('bg-gray-50 p-2').props('width=280 bordered'):
+        ui.label('Video Library').classes('text-base font-medium mb-2')
+        ui.button('Add File or Folder', icon='add', on_click=on_add_to_library).classes('w-full mb-2')
+        ui.separator()
+        library_list = ui.column().classes('w-full gap-0 overflow-y-auto mt-1')
+        render_library()
+
 
     # Toolbar at the top
     with ui.header().classes('flex items-center p-2 bg-gray-800 text-white'):
         with ui.row().classes('gap-4 items-center'):
-
-            # File picker button with icon
             async def on_pick():
                 file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
                 if file_path:

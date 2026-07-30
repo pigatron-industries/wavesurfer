@@ -57,13 +57,16 @@ def _entries(path: Path, *, include_files: bool, extensions: set[str] | None) ->
 async def pick_path(
     start_path: str = "",
     *,
-    mode: Literal["folder", "file"] = "folder",
+    mode: Literal["folder", "file", "any"] = "folder",
     extensions: Sequence[str] | None = None,
 ) -> str | None:
     """Open a dialog to browse the server's filesystem and pick a folder or file.
 
     ``extensions`` (e.g. ``[".py", "txt"]``) restricts which files are shown and
-    is only used when ``mode="file"``.
+    is used when ``mode`` is ``"file"`` or ``"any"``.
+
+    ``mode="any"`` lets the user either click a file to select it directly,
+    or click "Select this folder" to pick the current directory instead.
 
     Returns the chosen absolute path, or ``None`` if the user cancels.
     """
@@ -71,11 +74,15 @@ async def pick_path(
     current = {"path": _resolve_start(start_path)}
     normalized_extensions = _normalize_extensions(extensions)
 
+    titles = {
+        "folder": "Choose a folder",
+        "file": "Choose a file",
+        "any": "Choose a file or folder",
+    }
+
     dialog = ui.dialog()
     with dialog, ui.card().classes("w-[480px]"):
-        ui.label("Choose a folder" if mode == "folder" else "Choose a file").classes(
-            "text-base font-medium"
-        )
+        ui.label(titles[mode]).classes("text-base font-medium")
         volumes = _volumes()
         if volumes:
             with ui.row().classes("w-full gap-1 mt-1"):
@@ -100,7 +107,9 @@ async def pick_path(
                         "flat dense no-caps align=left"
                     ).classes("w-full justify-start")
                 dirs, files = _entries(
-                    current["path"], include_files=mode == "file", extensions=normalized_extensions
+                    current["path"],
+                    include_files=mode in ("file", "any"),
+                    extensions=normalized_extensions,
                 )
                 for entry in dirs:
                     ui.button(entry.name, icon="folder", on_click=lambda e=entry: navigate(e)).props(
@@ -124,7 +133,7 @@ async def pick_path(
 
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Cancel", on_click=lambda: finish(None)).props("flat")
-            if mode == "folder":
+            if mode in ("folder", "any"):
                 ui.button(
                     "Select this folder", on_click=lambda: finish(str(current["path"]))
                 ).props("flat")
@@ -145,3 +154,10 @@ async def pick_file(start_path: str = "", extensions: Sequence[str] | None = Non
     ``extensions`` (e.g. ``[".py", "txt"]``) restricts which files are shown.
     """
     return await pick_path(start_path, mode="file", extensions=extensions)
+
+
+async def pick_file_or_folder(
+    start_path: str = "", extensions: Sequence[str] | None = None
+) -> str | None:
+    """Open a dialog letting the user pick either a single file or an entire folder."""
+    return await pick_path(start_path, mode="any", extensions=extensions)
