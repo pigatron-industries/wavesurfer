@@ -3,6 +3,7 @@ Beat detection utility using librosa library.
 Detects beats and downbeats from audio files.
 """
 
+import traceback
 import librosa
 import numpy as np
 import logging
