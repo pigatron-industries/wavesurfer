@@ -4,7 +4,7 @@ Add your UI elements here.
 """
 
 from nicegui import ui
-from ui.folder_picker import pick_file
+from ui.path_picker import pick_file
 
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
@@ -23,10 +23,7 @@ def main_page():
             
             # File picker button with icon
             async def on_pick():
-                file_path = await pick_file(
-                    accepted_extensions=AUDIO_EXTENSIONS,
-                    title='Choose an audio file'
-                )
+                file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
                 if file_path:
                     selected_path_label.set_text(file_path)
                     handle_audio_file(file_path)
