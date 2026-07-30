@@ -8,6 +8,8 @@ from pathlib import Path
 from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder
 from api.beat_detection import detect_beats_and_downbeats
+import asyncio
+from api.thumbnails import get_thumbnail_data_url
 
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
@@ -35,8 +37,8 @@ def main_page():
 
     selected_path_label = None
     results_container = None
-    library_list = None
     library_files: list[Path] = []
+    thumbnails: dict[str, str | None] = {}   # str(path) -> data URL, or None if extraction failed
     active_path = {'value': None}
 
     def select_library_file(path: Path):
@@ -51,11 +53,21 @@ def main_page():
             if not library_files:
                 ui.label('No videos yet').classes('text-sm text-gray-400 italic p-2')
             for video in library_files:
-                btn = ui.button(
-                    video.name,
-                    icon='movie',
-                    on_click=lambda v=video: select_library_file(v),
-                ).props('flat dense no-caps align=left').classes('w-full justify-start text-left')
+                btn = ui.button(on_click=lambda v=video: select_library_file(v)).props(
+                    'flat dense no-caps align=left'
+                ).classes('w-full justify-start text-left normal-case')
+                with btn:
+                    with ui.row().classes('items-start gap-2 w-full flex-nowrap py-1'):
+                        thumb = thumbnails.get(str(video))
+                        if thumb:
+                            ui.image(thumb).classes(
+                                'w-10 h-10 object-cover rounded flex-shrink-0'
+                            )
+                        else:
+                            ui.icon('movie').classes('flex-shrink-0 mt-0.5')
+                        ui.label(video.name).classes('text-left').style(
+                            'white-space: normal; word-break: break-word; line-height: 1.3;'
+                        )
                 if active_path['value'] == str(video):
                     btn.classes('bg-blue-100 text-blue-800')
                 btn.tooltip(str(video))
@@ -66,13 +78,20 @@ def main_page():
             return
         path = Path(path_str)
         existing = {str(v) for v in library_files}
+        new_files: list[Path] = []
         if path.is_dir():
             for video in _scan_videos(path):
                 if str(video) not in existing:
                     library_files.append(video)
+                    new_files.append(video)
         elif path.is_file() and str(path) not in existing:
             library_files.append(path)
+            new_files.append(path)
         library_files.sort(key=lambda e: e.name.lower())
+
+        for video in new_files:
+            thumbnails[str(video)] = await asyncio.to_thread(get_thumbnail_data_url, str(video))
+
         render_library()
 
 
@@ -81,7 +100,7 @@ def main_page():
         ui.label('Video Library').classes('text-base font-medium mb-2')
         ui.button('Add File or Folder', icon='add', on_click=on_add_to_library).classes('w-full mb-2')
         ui.separator()
-        library_list = ui.column().classes('w-full gap-0 overflow-y-auto mt-1')
+        library_list = ui.column().classes('w-full gap-1 overflow-y-auto mt-1')
         render_library()
 
 

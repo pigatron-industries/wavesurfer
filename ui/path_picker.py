@@ -95,30 +95,43 @@ async def pick_path(
                             "text-[10px] text-gray-500 w-full text-center truncate"
                         ).tooltip(volume.name)
         path_label = ui.label().classes("text-xs text-gray-500 break-all")
-        list_container = ui.column().classes("w-full max-h-80 overflow-y-auto gap-0 mt-1")
+        list_container = ui.column().classes("w-full max-h-80 overflow-y-auto gap-1 mt-1")
+
+        WRAP_STYLE = (
+            "white-space: normal; word-break: break-word; "
+            "text-align: left; line-height: 1.2;"
+        )
 
         def render() -> None:
             path_label.set_text(str(current["path"]))
             list_container.clear()
+
+            def make_row_button(label_text: str, icon_name: str | None, on_click):
+                b = ui.button(on_click=on_click).props(
+                    "flat dense no-caps align=left"
+                ).classes("w-full justify-start normal-case")
+                with b:
+                    with ui.row().classes("items-start gap-2 w-full flex-nowrap py-1"):
+                        if icon_name:
+                            ui.icon(icon_name).classes("flex-shrink-0 mt-0.5")
+                        ui.label(label_text).classes("text-left").style(
+                            "white-space: normal; word-break: break-word; line-height: 1.3;"
+                        )
+                return b
+
             with list_container:
                 parent = current["path"].parent
                 if parent != current["path"]:
-                    ui.button("..", on_click=lambda: navigate(parent)).props(
-                        "flat dense no-caps align=left"
-                    ).classes("w-full justify-start")
+                    make_row_button("..", None, lambda: navigate(parent))
                 dirs, files = _entries(
                     current["path"],
                     include_files=mode in ("file", "any"),
                     extensions=normalized_extensions,
                 )
                 for entry in dirs:
-                    ui.button(entry.name, icon="folder", on_click=lambda e=entry: navigate(e)).props(
-                        "flat dense no-caps align=left"
-                    ).classes("w-full justify-start")
+                    make_row_button(entry.name, "folder", lambda e=entry: navigate(e))
                 for entry in files:
-                    ui.button(
-                        entry.name, icon="description", on_click=lambda e=entry: finish(str(e))
-                    ).props("flat dense no-caps align=left").classes("w-full justify-start")
+                    make_row_button(entry.name, "description", lambda e=entry: finish(str(e)))
 
         def navigate(path: Path) -> None:
             current["path"] = path
