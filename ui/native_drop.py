@@ -26,6 +26,7 @@ def setup_native_drop(queue: "multiprocessing.Queue") -> None:
     from webview.dom import DOMEventHandler
 
     def on_drag(e):
+        print(f'[native_drag] {e["type"]} fired', flush=True)
         pass
 
     def on_drop(e):

@@ -114,16 +114,14 @@ def main_page():
         while True:
             try:
                 paths = drop_queue.get_nowait()
+                print(paths)
             except queue.Empty:
                 break
-            asyncio.create_task(handle_dropped_paths(paths))
-
-    async def handle_dropped_paths(paths: list[str]) -> None:
-        before = {str(v) for v in library_files}
-        await add_paths_to_library(paths)
-        newly_added = [v for v in library_files if str(v) not in before]
-        if newly_added:
-            select_library_file(newly_added[0])
+            audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
+            if audio_paths:
+                dropped = audio_paths[0]
+                selected_path_label.set_text(dropped)
+                handle_audio_file(dropped, results_container)
 
     ui.timer(0.3, poll_native_drops)
 
