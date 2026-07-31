@@ -1,7 +1,8 @@
 """
-Video thumbnail utility.
+Video thumbnail and metadata utilities.
 Extracts the first frame of a video as a small base64 data URL for use as a
-library thumbnail, so we don't need a static file server or temp files on disk.
+library thumbnail, and reads video duration — all without needing a static file
+server or temp files on disk.
 """
 
 import base64
@@ -42,6 +43,24 @@ def get_thumbnail_data_url(video_path: str) -> str | None:
         return f'data:image/jpeg;base64,{b64}'
     except Exception as e:
         logger.warning(f"Could not extract thumbnail for {video_path}: {e}")
+        return None
+    finally:
+        cap.release()
+
+
+def get_video_duration(video_path: str) -> float | None:
+    """
+    Return the duration of `video_path` in seconds, or None if it can't be read.
+    """
+    cap = cv2.VideoCapture(video_path)
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        if fps <= 0 or frames <= 0:
+            return None
+        return frames / fps
+    except Exception as e:
+        logger.warning(f"Could not read duration for {video_path}: {e}")
         return None
     finally:
         cap.release()
