@@ -49,7 +49,7 @@ def main_page():
         active_path['value'] = str(path)
         selected_path_label.set_text(str(path))
         render_library()
-        handle_audio_file(str(path), results_container)
+        handle_audio_file(str(path), results_container, thumbnails)
 
     def render_library():
         library_list.clear()
@@ -126,9 +126,14 @@ def main_page():
                     audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
                     if audio_paths:
                         selected_path_label.set_text(audio_paths[0])
-                        handle_audio_file(audio_paths[0], results_container)
+                        handle_audio_file(audio_paths[0], results_container, thumbnails)
                 elif target == 'library':
                     asyncio.create_task(add_paths_to_library(paths))
+                elif target.startswith('downbeat-'):
+                    db_id = int(target.split('-')[1])
+                    video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
+                    if video_paths and state.timeline:
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], results_container, thumbnails))
 
     ui.timer(0.3, poll_native_drops)
 
@@ -151,7 +156,7 @@ def main_page():
                 file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
                 if file_path:
                     selected_path_label.set_text(file_path)
-                    handle_audio_file(file_path, results_container)
+                    handle_audio_file(file_path, results_container, thumbnails)
 
             ui.button(icon='audiotrack', on_click=on_pick).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0 mr-2')
             selected_path_label = ui.label('Select an audio file to get started').classes('text-sm text-gray-300 truncate max-w-[400px]')
@@ -170,15 +175,26 @@ def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = M
     return any(abs(timestamp - m) < tolerance for m in candidates)
 
 
-def _render_marker_column(container_classes: str, markers: list, timeline_start: float, timeline_height: float,
-                           bg_class: str = 'bg-gray-400', label_fmt=lambda t: f'{t:.2f}s'):
+def _render_marker_column(container_classes: str, downbeats: list[Downbeat], timeline_start: float, timeline_height: float,
+                           thumbnails: dict, bg_class: str = 'bg-gray-400'):
+    """Render downbeat boxes as drop targets with optional video thumbnails."""
+    sorted_dbs = sorted(downbeats, key=lambda db: db.time)
     with ui.element('div').classes(container_classes).style(f'height: {timeline_height:.2f}px;'):
-        for i in range(len(markers) - 1):
-            top = (markers[i] - timeline_start) * PX_PER_SEC
-            height = (markers[i + 1] - markers[i]) * PX_PER_SEC
-            with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
-                    .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
-                ui.label(label_fmt(markers[i])).classes('text-white text-xs')
+        for i in range(len(sorted_dbs) - 1):
+            db = sorted_dbs[i]
+            top = (db.time - timeline_start) * PX_PER_SEC
+            height = (sorted_dbs[i + 1].time - db.time) * PX_PER_SEC
+            with ui.element('div') \
+                    .classes(f'absolute w-full {bg_class} flex items-center justify-center cursor-pointer') \
+                    .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;') \
+                    .props('data-drop-target="downbeat-%d"' % db.id):
+                if db.path:
+                    thumb = thumbnails.get(db.path)
+                    if thumb:
+                        ui.image(thumb).classes('w-8 h-8 object-cover rounded')
+                    else:
+                        ui.icon('movie').classes('text-white text-sm')
+                ui.label(f'{db.time:.2f}s').classes('text-white text-xs absolute bottom-0.5 right-1')
 
 
 def _init_timeline(file_path: str) -> DownbeatTimeline:
@@ -194,7 +210,7 @@ def _init_timeline(file_path: str) -> DownbeatTimeline:
     return timeline
 
 
-def _render_timeline_from_state(results_container: ui.element):
+def _render_timeline_from_state(results_container: ui.element, thumbnails: dict):
     """Render the UI based on the current state.timeline object."""
     timeline = state.timeline
     if not timeline:
@@ -204,7 +220,13 @@ def _render_timeline_from_state(results_container: ui.element):
         return
 
     downbeats = timeline.downbeats
-    downbeat_times = [db.time for db in sorted(downbeats, key=lambda db: db.time)]
+
+    # Precompute thumbnails for any downbeat video paths not yet cached.
+    # Since we are inside a running event loop, we can't use asyncio.run().
+    # Instead, spawn async tasks for any missing thumbnails.
+    for db in downbeats:
+        if db.path and db.path not in thumbnails:
+            asyncio.create_task(_cache_thumbnail(db.path, thumbnails))
 
     results_container.clear()
     with results_container:
@@ -239,10 +261,11 @@ def _render_timeline_from_state(results_container: ui.element):
             timeline_height = total_dur * PX_PER_SEC
 
             with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
-                ui.label('Intervals (Left: Beats, Right: Downbeats)').classes('text-xs text-gray-500 mb-1')
+                ui.label('Intervals (Left: Beats, Right: Downbeats — drop videos on downbeat boxes)').classes('text-xs text-gray-500 mb-1')
 
                 with ui.row().classes('w-full gap-1 flex-nowrap'):
                     # Left column: beats
+                    downbeat_times = [db.time for db in sorted(downbeats, key=lambda db: db.time)]
                     with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                         if len(beats) > 1:
                             for i in range(len(beats) - 1):
@@ -258,26 +281,56 @@ def _render_timeline_from_state(results_container: ui.element):
                                     .style(f'top: 0; height: {timeline_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                                 ui.label('No beats').classes('text-gray-500')
 
-                    # Right column: downbeats
-                    if len(downbeat_times) > 1:
-                        _render_marker_column('flex-1 relative', downbeat_times, timeline_start, timeline_height)
-                    elif len(downbeat_times) == 1:
-                        with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
-                            ui.label(f'{downbeat_times[0]:.2f}s').classes('text-white text-xs absolute') \
-                                .style(f'top: {(downbeat_times[0] - timeline_start) * PX_PER_SEC:.2f}px;')
+                    # Right column: downbeats (drop targets with thumbnails)
+                    if len(downbeats) > 1:
+                        _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height, thumbnails)
+                    elif len(downbeats) == 1:
+                        db = downbeats[0]
+                        with ui.element('div') \
+                                .classes('flex-1 relative cursor-pointer') \
+                                .style(f'height: {timeline_height:.2f}px;') \
+                                .props('data-drop-target="downbeat-%d"' % db.id):
+                            if db.path:
+                                thumb = thumbnails.get(db.path)
+                                if thumb:
+                                    ui.image(thumb).classes('w-8 h-8 object-cover rounded absolute') \
+                                        .style(f'top: {(db.time - timeline_start) * PX_PER_SEC:.2f}px;')
+                                else:
+                                    ui.icon('movie').classes('text-white text-sm absolute') \
+                                        .style(f'top: {(db.time - timeline_start) * PX_PER_SEC:.2f}px;')
+                            ui.label(f'{db.time:.2f}s').classes('text-white text-xs absolute') \
+                                .style(f'top: {(db.time - timeline_start) * PX_PER_SEC:.2f}px;')
                     else:
                         with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                             ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
 
 
-def handle_audio_file(file_path: str, results_container: ui.element):
+async def _cache_thumbnail(path: str, thumbnails: dict):
+    """Extract a thumbnail for a video and cache it in the thumbnails dict."""
+    thumbnails[path] = await asyncio.to_thread(get_thumbnail_data_url, path)
+
+
+async def _handle_downbeat_drop(db_id: int, video_path: str, results_container: ui.element, thumbnails: dict):
+    """Associate a video with a downbeat, extract thumbnail, and re-render."""
+    if not state.timeline:
+        return
+    for db in state.timeline.downbeats:
+        if db.id == db_id:
+            db.path = video_path
+            if db.path not in thumbnails:
+                await _cache_thumbnail(db.path, thumbnails)
+            _render_timeline_from_state(results_container, thumbnails)
+            break
+
+
+def handle_audio_file(file_path: str, results_container: ui.element, thumbnails: dict):
     """Handle selected audio file: initialise timeline, detect beats, render."""
 
     # Step 1: initialise empty timeline for this audio file
     timeline = _init_timeline(file_path)
 
     # Step 2: render empty timeline immediately (shows duration, no downbeats yet)
-    _render_timeline_from_state(results_container)
+    _render_timeline_from_state(results_container, thumbnails)
 
     # Step 3: detect beats and populate downbeats
     try:
@@ -292,7 +345,7 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                 for i, t in enumerate(sorted(result.get('downbeats', [])))
             ]
             # Re-render with populated downbeats
-            _render_timeline_from_state(results_container)
+            _render_timeline_from_state(results_container, thumbnails)
         else:
             results_container.clear()
             with results_container:

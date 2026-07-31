@@ -46,20 +46,24 @@ def setup_native_drop(port: int) -> None:
     print(f'[native_drop] drop targets: {drop_target_map}', flush=True)
 
     def _find_drop_target_for_event(e):
-        """Use JS to find which drop target contains the event's target element."""
+        """Use JS to find which drop target contains the event's target element.
+
+        Queries the live DOM so dynamically added drop targets (e.g. downbeat
+        boxes created after audio is loaded) are picked up.
+        """
         target_id = (e.get('target') or e.get('srcElement') or {}).get('id', '')
-        if not target_id or not drop_target_map:
+        if not target_id:
             return None
-        containing_id = window.evaluate_js(
+        # Walk up from the event target to find a containing [data-drop-target].
+        # Return the attribute value directly — no static map needed.
+        return window.evaluate_js(
             f"(() => {{ "
             f"const t = document.getElementById({target_id!r}); "
             f"if (!t) return null; "
-            f"const hits = Array.from(document.querySelectorAll('[data-drop-target]')); "
-            f"const hit = hits.find(h => h.contains(t)); "
-            f"return hit ? hit.id : null; "
+            f"const el = t.closest('[data-drop-target]'); "
+            f"return el ? el.getAttribute('data-drop-target') : null; "
             f"}})()"
         )
-        return drop_target_map.get(containing_id) if containing_id else None
 
     def on_drag(e):
         target_type = _find_drop_target_for_event(e)
