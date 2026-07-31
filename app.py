@@ -13,7 +13,7 @@ from ui.native_drop import setup_native_drop, drop_queue
 def main():
     """Start the NiceGUI application."""
     app.native.start_args['func'] = functools.partial(setup_native_drop, drop_queue)
-    ui.run(port=54327, native=True)
+    ui.run(port=54327, native=True, reload=False)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

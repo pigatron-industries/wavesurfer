@@ -114,14 +114,15 @@ def main_page():
         while True:
             try:
                 paths = drop_queue.get_nowait()
-                print(paths)
             except queue.Empty:
                 break
-            audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
-            if audio_paths:
-                dropped = audio_paths[0]
-                selected_path_label.set_text(dropped)
-                handle_audio_file(dropped, results_container)
+            else:
+                print(f'got from queue: {paths}', flush=True)
+                audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
+                if audio_paths:
+                    dropped = audio_paths[0]
+                    selected_path_label.set_text(dropped)
+                    handle_audio_file(dropped, results_container)
 
     ui.timer(0.3, poll_native_drops)
 
