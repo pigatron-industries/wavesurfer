@@ -59,6 +59,7 @@ async def pick_path(
     *,
     mode: Literal["folder", "file", "any"] = "folder",
     extensions: Sequence[str] | None = None,
+    default_filename: str | None = None,
 ) -> str | None:
     """Open a dialog to browse the server's filesystem and pick a folder or file.
 
@@ -68,11 +69,17 @@ async def pick_path(
     ``mode="any"`` lets the user either click a file to select it directly,
     or click "Select this folder" to pick the current directory instead.
 
+    When ``default_filename`` is provided, the dialog enters *save* mode:
+    a filename input is shown at the bottom, clicking a file pre-fills that
+    input (so the user can overwrite it), and the confirm button saves to
+    ``current_dir / filename``.
+
     Returns the chosen absolute path, or ``None`` if the user cancels.
     """
     result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
     current = {"path": _resolve_start(start_path)}
     normalized_extensions = _normalize_extensions(extensions)
+    is_save_mode = default_filename is not None
 
     titles = {
         "folder": "Choose a folder",
@@ -82,9 +89,10 @@ async def pick_path(
 
     dialog = ui.dialog()
     with dialog, ui.card().classes("w-[480px]"):
-        ui.label(titles[mode]).classes("text-base font-medium")
+        ui.label(titles.get(mode, "Choose")).classes("text-base font-medium")
+
         volumes = _volumes()
-        if volumes:
+        if len(volumes) >= 2:
             with ui.row().classes("w-full gap-1 mt-1"):
                 for volume in volumes:
                     with ui.column().classes("items-center gap-0 w-14"):
@@ -94,30 +102,31 @@ async def pick_path(
                         ui.label(volume.name).classes(
                             "text-[10px] text-gray-500 w-full text-center truncate"
                         ).tooltip(volume.name)
-        path_label = ui.label().classes("text-xs text-gray-500 break-all")
-        list_container = ui.column().classes("w-full max-h-80 overflow-y-auto gap-1 mt-1")
 
-        WRAP_STYLE = (
-            "white-space: normal; word-break: break-word; "
-            "text-align: left; line-height: 1.2;"
-        )
+        path_label = ui.label().classes("text-xs text-gray-500 break-all")
+        list_container = ui.column().classes("w-full max-h-64 overflow-y-auto gap-1 mt-1")
+
+        # Filename input for save mode
+        name_input = None
+        if is_save_mode:
+            name_input = ui.input("File name", value=default_filename).props("autocomplete=off").classes("w-full")
+
+        def make_row_button(label_text: str, icon_name: str | None, on_click):
+            b = ui.button(on_click=on_click).props(
+                "flat dense no-caps align=left"
+            ).classes("w-full justify-start normal-case")
+            with b:
+                with ui.row().classes("items-start gap-2 w-full flex-nowrap py-1"):
+                    if icon_name:
+                        ui.icon(icon_name).classes("flex-shrink-0 mt-0.5")
+                    ui.label(label_text).classes("text-left").style(
+                        "white-space: normal; word-break: break-word; line-height: 1.3;"
+                    )
+            return b
 
         def render() -> None:
             path_label.set_text(str(current["path"]))
             list_container.clear()
-
-            def make_row_button(label_text: str, icon_name: str | None, on_click):
-                b = ui.button(on_click=on_click).props(
-                    "flat dense no-caps align=left"
-                ).classes("w-full justify-start normal-case")
-                with b:
-                    with ui.row().classes("items-start gap-2 w-full flex-nowrap py-1"):
-                        if icon_name:
-                            ui.icon(icon_name).classes("flex-shrink-0 mt-0.5")
-                        ui.label(label_text).classes("text-left").style(
-                            "white-space: normal; word-break: break-word; line-height: 1.3;"
-                        )
-                return b
 
             with list_container:
                 parent = current["path"].parent
@@ -125,13 +134,20 @@ async def pick_path(
                     make_row_button("..", None, lambda: navigate(parent))
                 dirs, files = _entries(
                     current["path"],
-                    include_files=mode in ("file", "any"),
+                    include_files=mode in ("file", "any") or is_save_mode,
                     extensions=normalized_extensions,
                 )
                 for entry in dirs:
                     make_row_button(entry.name, "folder", lambda e=entry: navigate(e))
                 for entry in files:
-                    make_row_button(entry.name, "description", lambda e=entry: finish(str(e)))
+                    if is_save_mode and name_input is not None:
+                        # In save mode, clicking a file pre-fills the name input
+                        make_row_button(
+                            entry.name, "description",
+                            lambda e=entry: name_input.set_value(e.name),
+                        )
+                    else:
+                        make_row_button(entry.name, "description", lambda e=entry: finish(str(e)))
 
         def navigate(path: Path) -> None:
             current["path"] = path
@@ -146,7 +162,14 @@ async def pick_path(
 
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Cancel", on_click=lambda: finish(None)).props("flat")
-            if mode in ("folder", "any"):
+            if is_save_mode and name_input is not None:
+                ui.button(
+                    "Save",
+                    on_click=lambda: finish(
+                        str(current["path"] / (name_input.value or ""))
+                    ),
+                ).props("color=primary")
+            elif mode in ("folder", "any"):
                 ui.button(
                     "Select this folder", on_click=lambda: finish(str(current["path"]))
                 ).props("flat")

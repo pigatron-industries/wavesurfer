@@ -6,7 +6,7 @@ Add your UI elements here.
 from bisect import bisect_left
 from pathlib import Path
 from nicegui import ui
-from ui.path_picker import pick_file, pick_file_or_folder, pick_folder
+from ui.path_picker import pick_file, pick_file_or_folder, pick_path
 from api.beat_detection import detect_beats_and_downbeats
 from api.export_rpp import export_to_rpp
 from api.schema import Downbeat, DownbeatTimeline
@@ -44,15 +44,6 @@ def _last_folder() -> str:
 
 def _set_last_folder(folder: str) -> None:
     _config['last_folder'] = folder
-    _persist_config()
-
-
-def _last_saved_file() -> str:
-    return _config.get('last_saved_file', '')
-
-
-def _set_last_saved_file(name: str) -> None:
-    _config['last_saved_file'] = name
     _persist_config()
 
 
@@ -98,36 +89,17 @@ async def _save_timeline(library_files: list[Path], thumbnails: dict, video_dura
         ui.notify('No timeline to save', color='warning')
         return
 
-    folder = await pick_folder(start_path=_last_folder())
-    if not folder:
-        return
-    _set_last_folder(folder)
-
-    result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
     suggested = Path(state.timeline.path).stem + '.json'
-
-    dialog = ui.dialog()
-    with dialog, ui.card().classes('w-[400px] p-4'):
-        ui.label('Save timeline').classes('text-base font-medium')
-        ui.label(f'Folder: {Path(folder).name}').classes('text-xs text-gray-500')
-        name_input = ui.input('File name', value=suggested).props('autocomplete=off')
-        with ui.row().classes('justify-end gap-2 mt-2'):
-            ui.button('Cancel', on_click=lambda: finish(None)).props('flat')
-            ui.button('Save', on_click=lambda: finish(
-                str(Path(folder) / (name_input.value if name_input.value else suggested))
-            ))
-
-    def finish(value: str | None):
-        if not result.done():
-            result.set_result(value)
-        dialog.close()
-
-    dialog.on('hide', lambda: finish(None))
-    dialog.open()
-    save_path = await result
-
+    save_path = await pick_path(
+        start_path=_last_folder(),
+        mode='file',
+        extensions=JSON_EXTENSIONS,
+        default_filename=suggested,
+    )
     if not save_path:
         return
+
+    _set_last_folder(str(Path(save_path).parent))
 
     try:
         data = _timeline_to_dict(state.timeline)
@@ -193,36 +165,17 @@ async def _export_rpp():
         ui.notify('No timeline to export', color='warning')
         return
 
-    folder = await pick_folder(start_path=_last_folder())
-    if not folder:
-        return
-    _set_last_folder(folder)
-
-    result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
     suggested = Path(state.timeline.path).stem + '.rpp'
-
-    dialog = ui.dialog()
-    with dialog, ui.card().classes('w-[400px] p-4'):
-        ui.label('Export to Reaper').classes('text-base font-medium')
-        ui.label(f'Folder: {Path(folder).name}').classes('text-xs text-gray-500')
-        name_input = ui.input('File name', value=suggested).props('autocomplete=off')
-        with ui.row().classes('justify-end gap-2 mt-2'):
-            ui.button('Cancel', on_click=lambda: finish(None)).props('flat')
-            ui.button('Export', on_click=lambda: finish(
-                str(Path(folder) / (name_input.value if name_input.value else suggested))
-            ))
-
-    def finish(value: str | None):
-        if not result.done():
-            result.set_result(value)
-        dialog.close()
-
-    dialog.on('hide', lambda: finish(None))
-    dialog.open()
-    export_path = await result
-
+    export_path = await pick_path(
+        start_path=_last_folder(),
+        mode='file',
+        extensions=RPP_EXTENSIONS,
+        default_filename=suggested,
+    )
     if not export_path:
         return
+
+    _set_last_folder(str(Path(export_path).parent))
 
     try:
         export_to_rpp(state.timeline, export_path)
