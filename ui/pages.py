@@ -9,7 +9,9 @@ from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder
 from api.beat_detection import detect_beats_and_downbeats
 import asyncio
+import queue
 from api.thumbnails import get_thumbnail_data_url
+from ui.native_drop import drop_queue
 
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
@@ -51,7 +53,7 @@ def main_page():
         library_list.clear()
         with library_list:
             if not library_files:
-                ui.label('No videos yet').classes('text-sm text-gray-400 italic p-2')
+                ui.label('No videos yet — drag files or a folder in').classes('text-sm text-gray-400 italic p-2')
             for video in library_files:
                 btn = ui.button(on_click=lambda v=video: select_library_file(v)).props(
                     'flat dense no-caps align=left'
@@ -72,32 +74,63 @@ def main_page():
                     btn.classes('bg-blue-100 text-blue-800')
                 btn.tooltip(str(video))
 
-    async def on_add_to_library():
-        path_str = await pick_file_or_folder(extensions=VIDEO_EXTENSIONS)
-        if not path_str:
-            return
-        path = Path(path_str)
+    async def add_paths_to_library(path_strs: list[str]) -> None:
+        """Add one or more filesystem paths (files or folders) to the library.
+
+        Shared by the manual "Add File or Folder" picker and native OS
+        drag-and-drop, so both routes stay in sync and dedupe the same way.
+        """
         existing = {str(v) for v in library_files}
         new_files: list[Path] = []
-        if path.is_dir():
-            for video in _scan_videos(path):
-                if str(video) not in existing:
-                    library_files.append(video)
-                    new_files.append(video)
-        elif path.is_file() and str(path) not in existing:
-            library_files.append(path)
-            new_files.append(path)
-        library_files.sort(key=lambda e: e.name.lower())
 
+        for path_str in path_strs:
+            path = Path(path_str)
+            if path.is_dir():
+                for video in _scan_videos(path):
+                    if str(video) not in existing:
+                        library_files.append(video)
+                        new_files.append(video)
+                        existing.add(str(video))
+            elif path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS and str(path) not in existing:
+                library_files.append(path)
+                new_files.append(path)
+                existing.add(str(path))
+
+        if not new_files:
+            return
+
+        library_files.sort(key=lambda e: e.name.lower())
         for video in new_files:
             thumbnails[str(video)] = await asyncio.to_thread(get_thumbnail_data_url, str(video))
 
         render_library()
 
+    async def on_add_to_library():
+        path_str = await pick_file_or_folder(extensions=VIDEO_EXTENSIONS)
+        if path_str:
+            await add_paths_to_library([path_str])
+
+    def poll_native_drops() -> None:
+        while True:
+            try:
+                paths = drop_queue.get_nowait()
+            except queue.Empty:
+                break
+            asyncio.create_task(handle_dropped_paths(paths))
+
+    async def handle_dropped_paths(paths: list[str]) -> None:
+        before = {str(v) for v in library_files}
+        await add_paths_to_library(paths)
+        newly_added = [v for v in library_files if str(v) not in before]
+        if newly_added:
+            select_library_file(newly_added[0])
+
+    ui.timer(0.3, poll_native_drops)
 
     # Left sidebar: video library
-    with ui.left_drawer(value=True).classes('bg-gray-50 p-2').props('width=280 bordered'):
+    with ui.left_drawer(value=True).classes('bg-gray-50 p-2').props('width=280 bordered behavior=desktop'):
         ui.label('Video Library').classes('text-base font-medium mb-2')
+        ui.label('Drag files or a folder here').classes('text-xs text-gray-400 italic mb-1')
         ui.button('Add File or Folder', icon='add', on_click=on_add_to_library).classes('w-full mb-2')
         ui.separator()
         library_list = ui.column().classes('w-full gap-1 overflow-y-auto mt-1')
@@ -123,13 +156,6 @@ def main_page():
 
 
 def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = MARKER_MATCH_TOLERANCE) -> bool:
-    """
-    Check whether `timestamp` falls within `tolerance` seconds of any value in
-    `sorted_markers`. Uses binary search instead of a linear scan, so this stays
-    cheap regardless of how many markers there are or what ratio they bear to
-    the beat list — works the same whether `sorted_markers` is downbeats,
-    structural section boundaries, or anything else timestamp-based later.
-    """
     if not sorted_markers:
         return False
     i = bisect_left(sorted_markers, timestamp)
@@ -139,12 +165,6 @@ def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = M
 
 def _render_marker_column(container_classes: str, markers: list, timeline_start: float, px_per_sec: float,
                            bg_class: str = 'bg-gray-400', label_fmt=lambda t: f'{t:.2f}s'):
-    """
-    Render one timeline column as absolutely-positioned boxes, one per interval
-    between consecutive `markers`. Position/height are computed from real time
-    via `px_per_sec`, so any column built this way lines up exactly with any
-    other column built the same way, regardless of how many markers each has.
-    """
     with ui.element('div').classes(container_classes).style(f'height: {TIMELINE_HEIGHT_PX}px;'):
         for i in range(len(markers) - 1):
             top = (markers[i] - timeline_start) * px_per_sec
@@ -157,20 +177,16 @@ def _render_marker_column(container_classes: str, markers: list, timeline_start:
 def handle_audio_file(file_path: str, results_container: ui.element):
     """Handle selected audio file by calling beat detection directly."""
 
-    # Clear previous results
     results_container.clear()
 
-    # Show loading state
     with results_container:
         ui.label('Detecting beats...').classes('text-lg text-gray-500')
         ui.linear_progress().props('indeterminate')
 
     try:
-        # Call beat detection directly (server has access to the file path)
         result = detect_beats_and_downbeats(file_path)
 
         if result.get('success'):
-            # Display successful beat detection results
             results_container.clear()
             with results_container:
                 ui.label('Beat Detection Results').classes('text-lg font-bold text-green-600')
@@ -192,25 +208,18 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                 if result.get('downbeats_estimated'):
                     ui.label('Note: Downbeats are estimated (naive 4/4 time assumption)').classes('text-xs text-gray-400 italic mt-1')
 
-                # Beat visualization
                 with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
                     ui.label('Intervals (Left: Beats, Right: Downbeats)').classes('text-xs text-gray-500 mb-1')
                     beats = result['beats']
                     downbeats = sorted(result.get('downbeats', []))
 
                     if len(beats) > 1:
-                        # Shared time scale for both columns — this is what guarantees
-                        # alignment. Any column rendered with this same
-                        # timeline_start/px_per_sec lines up exactly with any other,
-                        # regardless of how many markers it has or what ratio they
-                        # bear to each other.
                         timeline_start = beats[0]
                         timeline_end = beats[-1]
                         total_dur = timeline_end - timeline_start
                         px_per_sec = TIMELINE_HEIGHT_PX / total_dur if total_dur > 0 else 0
 
                         with ui.row().classes('w-full gap-1 flex-nowrap'):
-                            # Left: Beats (colored by whether a downbeat/marker falls near this beat)
                             with ui.element('div').classes('flex-1 relative').style(f'height: {TIMELINE_HEIGHT_PX}px;'):
                                 for i in range(len(beats) - 1):
                                     top = (beats[i] - timeline_start) * px_per_sec
@@ -221,11 +230,6 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                                             .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                                         ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
 
-                            # Right: Downbeats — same timeline_start/px_per_sec as the
-                            # beats column above, so a downbeat and its matching beat
-                            # land at identical pixel offsets. No padding-box
-                            # bookkeeping needed even if downbeats don't start/end
-                            # exactly at the beat timeline's bounds.
                             if len(downbeats) > 1:
                                 _render_marker_column('flex-1 relative', downbeats, timeline_start, px_per_sec)
                             elif len(downbeats) == 1:
@@ -237,14 +241,12 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                                     ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
 
         else:
-            # Display error from beat detection
             results_container.clear()
             with results_container:
                 ui.label('Error detecting beats').classes('text-lg font-bold text-red-600')
                 ui.label(result.get('error', 'Unknown error')).classes('text-sm text-red-500')
 
     except Exception as e:
-        # Display unexpected error
         results_container.clear()
         with results_container:
             ui.label('Error').classes('text-lg font-bold text-red-600')
