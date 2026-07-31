@@ -35,28 +35,45 @@ def setup_native_drop(port: int) -> None:
     import webview
     from webview.dom import DOMEventHandler
 
-    def on_drag(e):
-        print(f'[native_drag] {e["type"]} fired', flush=True)
-        pass
-
-    def on_drop(e):
-        files = e.get('dataTransfer', {}).get('files', [])
-        paths = [f['pywebviewFullPath'] for f in files if f.get('pywebviewFullPath')]
-        print(f'[native_drop] drop: {paths}', flush=True)
-        if paths:
-            body = json.dumps({'paths': paths}).encode()
-            request = urllib.request.Request(
-                f'http://127.0.0.1:{port}/api/native-drop',
-                data=body,
-                headers={'Content-Type': 'application/json'},
-            )
-            try:
-                urllib.request.urlopen(request, timeout=5)
-            except OSError:
-                print('[native_drop] failed to post dropped paths to server', flush=True)
+    def _is_in_drop_target(target_el):
+        """Walk up the DOM tree to see if the target (or an ancestor) is the drop target."""
+        current = target_el
+        while current:
+            if current.get('attributes', {}).get('data-drop-target') == 'audio':
+                return True
+            current = current.get('parentElement')
+        return False
 
     window = webview.windows[0]
+
+    def on_drag(e):
+        target = e.get('target') or e.get('srcElement')
+        if target and _is_in_drop_target(target):
+            print(f'[native_drag] {e["type"]} fired (in header)', flush=True)
+        else:
+            print(f'[native_drag] {e["type"]} fired (outside header, ignoring)', flush=True)
+
+    def on_drop(e):
+        target = e.get('target') or e.get('srcElement')
+        if target and _is_in_drop_target(target):
+            files = e.get('dataTransfer', {}).get('files', [])
+            paths = [f['pywebviewFullPath'] for f in files if f.get('pywebviewFullPath')]
+            print(f'[native_drop] drop in header: {paths}', flush=True)
+            if paths:
+                body = json.dumps({'paths': paths}).encode()
+                request = urllib.request.Request(
+                    f'http://127.0.0.1:{port}/api/native-drop',
+                    data=body,
+                    headers={'Content-Type': 'application/json'},
+                )
+                try:
+                    urllib.request.urlopen(request, timeout=5)
+                except OSError:
+                    print('[native_drop] failed to post dropped paths to server', flush=True)
+        else:
+            print('[native_drop] drop outside header, ignoring', flush=True)
+
     window.dom.document.events.dragenter += DOMEventHandler(on_drag, True, True)
     window.dom.document.events.dragover += DOMEventHandler(on_drag, True, True, debounce=500)
     window.dom.document.events.drop += DOMEventHandler(on_drop, True, True)
-    print('[native_drop] DOM events bound', flush=True)
+    print('[native_drop] DOM events bound (scoped to header via target check)', flush=True)

@@ -136,8 +136,9 @@ def main_page():
         render_library()
 
 
-    # Toolbar at the top
-    with ui.header().classes('flex items-center p-2 bg-gray-800 text-white'):
+    # Toolbar at the top — also the native drop target for audio files
+    with ui.header().classes('flex items-center p-2 bg-gray-800 text-white') \
+            .props('data-drop-target="audio"'):
         with ui.row().classes('gap-4 items-center'):
             async def on_pick():
                 file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
