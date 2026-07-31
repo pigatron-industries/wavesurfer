@@ -19,6 +19,7 @@ async def native_drop(request: Request):
     """Receive dropped file paths from the pywebview process (see ui/native_drop.py)."""
     data = await request.json()
     paths = data.get('paths', [])
+    target = data.get('target', '')
     if paths:
-        drop_queue.put(paths)
+        drop_queue.put({'target': target, 'paths': paths})
     return {'status': 'ok'}

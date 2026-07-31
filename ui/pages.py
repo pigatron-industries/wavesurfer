@@ -113,21 +113,26 @@ def main_page():
     def poll_native_drops() -> None:
         while True:
             try:
-                paths = drop_queue.get_nowait()
+                entry = drop_queue.get_nowait()
             except queue.Empty:
                 break
             else:
-                print(f'got from queue: {paths}', flush=True)
-                audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
-                if audio_paths:
-                    dropped = audio_paths[0]
-                    selected_path_label.set_text(dropped)
-                    handle_audio_file(dropped, results_container)
+                target = entry.get('target', '')
+                paths = entry.get('paths', [])
+                print(f'got from queue: target={target!r}, paths={paths}', flush=True)
+                if target == 'audio':
+                    audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
+                    if audio_paths:
+                        selected_path_label.set_text(audio_paths[0])
+                        handle_audio_file(audio_paths[0], results_container)
+                elif target == 'library':
+                    asyncio.create_task(add_paths_to_library(paths))
 
     ui.timer(0.3, poll_native_drops)
 
     # Left sidebar: video library
-    with ui.left_drawer(value=True).classes('bg-gray-50 p-2').props('width=280 bordered behavior=desktop'):
+    with ui.left_drawer(value=True).classes('bg-gray-50 p-2').props('width=280 bordered behavior=desktop') \
+            .props('data-drop-target="library"'):
         ui.label('Video Library').classes('text-base font-medium mb-2')
         ui.label('Drag files or a folder here').classes('text-xs text-gray-400 italic mb-1')
         ui.button('Add File or Folder', icon='add', on_click=on_add_to_library).classes('w-full mb-2')
