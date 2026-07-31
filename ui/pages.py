@@ -6,11 +6,12 @@ Add your UI elements here.
 from bisect import bisect_left
 from pathlib import Path
 from nicegui import ui
-from ui.path_picker import pick_file, pick_file_or_folder
+from ui.path_picker import pick_file, pick_file_or_folder, pick_folder
 from api.beat_detection import detect_beats_and_downbeats
 from api.schema import Downbeat, DownbeatTimeline
 from api import state
 import asyncio
+import json
 import queue
 from api.thumbnails import get_thumbnail_data_url, get_video_duration
 from ui.native_drop import drop_queue
@@ -18,9 +19,121 @@ import librosa
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
 VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
+JSON_EXTENSIONS = ['.json']
 
 PX_PER_SEC = 30  # pixels per second of audio; determines interval box height
 MARKER_MATCH_TOLERANCE = 0.05  # seconds; used to test "is this beat also a downbeat/marker"
+
+
+def _timeline_to_dict(timeline: DownbeatTimeline) -> dict:
+    """Serialize a DownbeatTimeline to a plain dict for JSON saving."""
+    return timeline.model_dump()
+
+
+def _timeline_from_dict(data: dict) -> DownbeatTimeline:
+    """Deserialize a dict (from JSON) into a DownbeatTimeline."""
+    downbeats = [Downbeat(**db) for db in data.get('downbeats', [])]
+    return DownbeatTimeline(
+        path=data['path'],
+        beats=data.get('beats', []),
+        downbeats=downbeats,
+        tempo=data.get('tempo'),
+        duration=data.get('duration'),
+    )
+
+
+async def _save_timeline(library_files: list[Path], thumbnails: dict, video_durations: dict,
+                          results_container: ui.element):
+    """Save the current timeline state as a JSON file."""
+    if not state.timeline:
+        ui.notify('No timeline to save', color='warning')
+        return
+
+    folder = await pick_folder()
+    if not folder:
+        return
+
+    result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
+    suggested = Path(state.timeline.path).stem + '.json'
+
+    dialog = ui.dialog()
+    with dialog, ui.card().classes('w-[400px] p-4'):
+        ui.label('Save timeline').classes('text-base font-medium')
+        ui.label(f'Folder: {Path(folder).name}').classes('text-xs text-gray-500')
+        name_input = ui.input('File name', value=suggested).props('autocomplete=off')
+        with ui.row().classes('justify-end gap-2 mt-2'):
+            ui.button('Cancel', on_click=lambda: finish(None)).props('flat')
+            ui.button('Save', on_click=lambda: finish(
+                str(Path(folder) / (name_input.value if name_input.value else suggested))
+            ))
+
+    def finish(value: str | None):
+        if not result.done():
+            result.set_result(value)
+        dialog.close()
+
+    dialog.on('hide', lambda: finish(None))
+    dialog.open()
+    save_path = await result
+
+    if not save_path:
+        return
+
+    try:
+        data = _timeline_to_dict(state.timeline)
+        Path(save_path).write_text(json.dumps(data, indent=2))
+        ui.notify(f'Saved to {Path(save_path).name}', color='positive')
+    except Exception as e:
+        ui.notify(f'Failed to save: {e}', color='negative')
+
+
+async def _load_timeline(library_files: list[Path], thumbnails: dict, video_durations: dict,
+                          results_container: ui.element, add_paths_to_library,
+                          selected_path_label, active_path):
+    """Load a timeline state from a JSON file."""
+    json_file = await pick_file(extensions=JSON_EXTENSIONS)
+    if not json_file:
+        return
+
+    try:
+        data = json.loads(Path(json_file).read_text())
+        timeline = _timeline_from_dict(data)
+        state.timeline = timeline
+        active_path['value'] = timeline.path
+
+        # Add audio file to library if not already present
+        audio_path = Path(timeline.path)
+        if audio_path.exists() and str(audio_path) not in {str(v) for v in library_files}:
+            library_files.append(audio_path)
+            library_files.sort(key=lambda e: e.name.lower())
+
+        # Collect all video paths from downbeats and add to library
+        for db in timeline.downbeats:
+            if db.path:
+                vid_path = Path(db.path)
+                if vid_path.exists() and str(vid_path) not in {str(v) for v in library_files}:
+                    library_files.append(vid_path)
+                    library_files.sort(key=lambda e: e.name.lower())
+
+        selected_path_label.set_text(timeline.path)
+
+        # Cache thumbnails and durations for assigned videos
+        for db in timeline.downbeats:
+            if db.path:
+                if db.path not in thumbnails:
+                    await _cache_thumbnail(db.path, thumbnails)
+                if db.path not in video_durations:
+                    await _cache_video_duration(db.path, video_durations)
+
+        # Render library and timeline
+        # We need to access render_library from the closure; handled via the main_page closure
+        _render_timeline_from_state(results_container, thumbnails, video_durations)
+        ui.notify(f'Loaded {Path(json_file).name}', color='positive')
+
+    except json.JSONDecodeError:
+        ui.notify('Invalid JSON file', color='negative')
+    except Exception as e:
+        ui.notify(f'Failed to load: {e}', color='negative')
 
 
 def _scan_videos(folder: Path) -> list[Path]:
@@ -153,12 +266,23 @@ def main_page():
     with ui.header().classes('flex items-center p-2 bg-gray-800 text-white') \
             .props('data-drop-target="audio"'):
         with ui.row().classes('gap-4 items-center'):
+            async def on_save():
+                await _save_timeline(library_files, thumbnails, video_durations, results_container)
+
+            async def on_load():
+                await _load_timeline(library_files, thumbnails, video_durations,
+                                     results_container, add_paths_to_library,
+                                     selected_path_label, active_path)
+                render_library()
+
             async def on_pick():
                 file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
                 if file_path:
                     selected_path_label.set_text(file_path)
                     handle_audio_file(file_path, results_container, thumbnails, video_durations)
 
+            ui.button(icon='save', on_click=on_save).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Save timeline')
+            ui.button(icon='folder_open', on_click=on_load).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Load timeline')
             ui.button(icon='audiotrack', on_click=on_pick).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0 mr-2')
             selected_path_label = ui.label('Select an audio file to get started').classes('text-sm text-gray-300 truncate max-w-[400px]')
 
