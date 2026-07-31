@@ -26,6 +26,53 @@ RPP_EXTENSIONS = ['.rpp']
 PX_PER_SEC = 30  # pixels per second of audio; determines interval box height
 MARKER_MATCH_TOLERANCE = 0.05  # seconds; used to test "is this beat also a downbeat/marker"
 
+_config_path = Path.home() / '.wavesurfer' / 'config.json'
+_config = json.loads(_config_path.read_text()) if _config_path.exists() else {}
+
+
+def _persist_config() -> None:
+    try:
+        _config_path.parent.mkdir(parents=True, exist_ok=True)
+        _config_path.write_text(json.dumps(_config, indent=2))
+    except OSError:
+        pass
+
+
+def _last_folder() -> str:
+    return _config.get('last_folder', '')
+
+
+def _set_last_folder(folder: str) -> None:
+    _config['last_folder'] = folder
+    _persist_config()
+
+
+def _last_saved_file() -> str:
+    return _config.get('last_saved_file', '')
+
+
+def _set_last_saved_file(name: str) -> None:
+    _config['last_saved_file'] = name
+    _persist_config()
+
+
+def _audio_folder() -> str:
+    return _config.get('audio_folder', '')
+
+
+def _set_audio_folder(folder: str) -> None:
+    _config['audio_folder'] = folder
+    _persist_config()
+
+
+def _video_folder() -> str:
+    return _config.get('video_folder', '')
+
+
+def _set_video_folder(folder: str) -> None:
+    _config['video_folder'] = folder
+    _persist_config()
+
 
 def _timeline_to_dict(timeline: DownbeatTimeline) -> dict:
     """Serialize a DownbeatTimeline to a plain dict for JSON saving."""
@@ -51,9 +98,10 @@ async def _save_timeline(library_files: list[Path], thumbnails: dict, video_dura
         ui.notify('No timeline to save', color='warning')
         return
 
-    folder = await pick_folder()
+    folder = await pick_folder(start_path=_last_folder())
     if not folder:
         return
+    _set_last_folder(folder)
 
     result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
     suggested = Path(state.timeline.path).stem + '.json'
@@ -93,9 +141,10 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
                           results_container: ui.element, add_paths_to_library,
                           selected_path_label, active_path):
     """Load a timeline state from a JSON file."""
-    json_file = await pick_file(extensions=JSON_EXTENSIONS)
+    json_file = await pick_file(start_path=_last_folder(), extensions=JSON_EXTENSIONS)
     if not json_file:
         return
+    _set_last_folder(str(Path(json_file).parent))
 
     try:
         data = json.loads(Path(json_file).read_text())
@@ -144,9 +193,10 @@ async def _export_rpp():
         ui.notify('No timeline to export', color='warning')
         return
 
-    folder = await pick_folder()
+    folder = await pick_folder(start_path=_last_folder())
     if not folder:
         return
+    _set_last_folder(folder)
 
     result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
     suggested = Path(state.timeline.path).stem + '.rpp'
@@ -267,8 +317,9 @@ def main_page():
         render_library()
 
     async def on_add_to_library():
-        path_str = await pick_file_or_folder(extensions=VIDEO_EXTENSIONS)
+        path_str = await pick_file_or_folder(start_path=_video_folder(), extensions=VIDEO_EXTENSIONS)
         if path_str:
+            _set_video_folder(str(Path(path_str).parent if Path(path_str).is_file() else Path(path_str)))
             await add_paths_to_library([path_str])
 
     def poll_native_drops() -> None:
@@ -321,19 +372,19 @@ def main_page():
                 render_library()
 
             async def on_pick():
-                file_path = await pick_file(extensions=AUDIO_EXTENSIONS)
+                file_path = await pick_file(start_path=_audio_folder(), extensions=AUDIO_EXTENSIONS)
                 if file_path:
+                    _set_audio_folder(str(Path(file_path).parent))
                     selected_path_label.set_text(file_path)
                     handle_audio_file(file_path, results_container, thumbnails, video_durations)
 
             async def on_export():
                 await _export_rpp()
 
-            ui.button(icon='save', on_click=on_save).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Save timeline')
-            ui.button(icon='folder_open', on_click=on_load).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Load timeline')
-            ui.button(icon='import_contacts', on_click=on_export).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Export to Reaper')
-            ui.separator().props('vertical').classes('h-6 mx-1')
             ui.button(icon='audiotrack', on_click=on_pick).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0 mr-2')
+            ui.button(icon='folder_open', on_click=on_load).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Load timeline')
+            ui.button(icon='save', on_click=on_save).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Save timeline')
+            ui.button(icon='import_contacts', on_click=on_export).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Export to Reaper')
             selected_path_label = ui.label('Select an audio file to get started').classes('text-sm text-gray-300 truncate max-w-[400px]')
 
     # Main content area

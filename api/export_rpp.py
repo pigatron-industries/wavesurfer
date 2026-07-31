@@ -161,8 +161,7 @@ def _item_chunk(*, position: float, length: float, name: str, file_path: str,
         f'{inner}LENGTH {length:.6f}\n'
         f'{inner}NAME "{_esc(name)}"\n'
         f'{inner}<SOURCE {source_type}\n'
-        if(extra is not None):
-            f'{inner}  {extra}\n'
+        # f'{inner}  {extra}\n' if extra else ''
         f'{inner}  FILE "{_esc(file_path)}"\n'
         f'{inner}>\n'
         f'{indent}>\n'
