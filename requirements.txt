@@ -2,3 +2,4 @@ nicegui
 pywebview
 librosa
 opencv-python-headless
+pydantic
