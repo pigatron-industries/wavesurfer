@@ -8,11 +8,13 @@ from pathlib import Path
 from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder
 from api.beat_detection import detect_beats_and_downbeats
+from api.schema import Downbeat, DownbeatTimeline
+from api import state
 import asyncio
 import queue
 from api.thumbnails import get_thumbnail_data_url
 from ui.native_drop import drop_queue
-
+import librosa
 
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
 VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
@@ -179,72 +181,118 @@ def _render_marker_column(container_classes: str, markers: list, timeline_start:
                 ui.label(label_fmt(markers[i])).classes('text-white text-xs')
 
 
-def handle_audio_file(file_path: str, results_container: ui.element):
-    """Handle selected audio file by calling beat detection directly."""
+def _init_timeline(file_path: str) -> DownbeatTimeline:
+    """Create an empty DownbeatTimeline for the given audio file."""
+    duration = None
+    try:
+        y, sr = librosa.load(file_path, sr=None)
+        duration = len(y) / sr
+    except Exception:
+        pass
+    timeline = DownbeatTimeline(path=file_path, downbeats=[], duration=duration)
+    state.timeline = timeline
+    return timeline
+
+
+def _render_timeline_from_state(results_container: ui.element):
+    """Render the UI based on the current state.timeline object."""
+    timeline = state.timeline
+    if not timeline:
+        results_container.clear()
+        with results_container:
+            ui.label('No audio loaded').classes('text-gray-500')
+        return
+
+    downbeats = timeline.downbeats
+    downbeat_times = [db.time for db in sorted(downbeats, key=lambda db: db.time)]
 
     results_container.clear()
-
     with results_container:
-        ui.label('Detecting beats...').classes('text-lg text-gray-500')
-        ui.linear_progress().props('indeterminate')
+        ui.label(f'Audio: {Path(timeline.path).name}').classes('text-lg font-bold')
+        ui.separator()
 
+        # Show metadata
+        with ui.row().classes('gap-4'):
+            if timeline.tempo is not None:
+                with ui.card().classes('w-48 p-2'):
+                    ui.label('Tempo').classes('text-sm text-gray-500')
+                    ui.label(f"{timeline.tempo:.1f} BPM").classes('text-2xl font-bold')
+
+            with ui.card().classes('w-48 p-2'):
+                ui.label('Total Beats').classes('text-sm text-gray-500')
+                ui.label(str(len(timeline.beats))).classes('text-2xl font-bold')
+
+            if timeline.duration is not None:
+                with ui.card().classes('w-48 p-2'):
+                    ui.label('Duration').classes('text-sm text-gray-500')
+                    ui.label(f"{timeline.duration:.1f}s").classes('text-2xl font-bold')
+            with ui.card().classes('w-48 p-2'):
+                ui.label('Downbeats').classes('text-sm text-gray-500')
+                ui.label(str(len(downbeats))).classes('text-2xl font-bold')
+
+        # Visual timeline — two columns: beats (left), downbeats (right)
+        if timeline.duration is not None and timeline.duration > 0:
+            beats = timeline.beats
+            timeline_start = beats[0] if beats else 0.0
+            timeline_end = beats[-1] if beats else timeline.duration
+            total_dur = timeline_end - timeline_start
+            timeline_height = total_dur * PX_PER_SEC
+
+            with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
+                ui.label('Intervals (Left: Beats, Right: Downbeats)').classes('text-xs text-gray-500 mb-1')
+
+                with ui.row().classes('w-full gap-1 flex-nowrap'):
+                    # Left column: beats
+                    with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
+                        if len(beats) > 1:
+                            for i in range(len(beats) - 1):
+                                top = (beats[i] - timeline_start) * PX_PER_SEC
+                                height = (beats[i + 1] - beats[i]) * PX_PER_SEC
+                                is_marker = _is_marker_near(beats[i], downbeat_times)
+                                bg_class = 'bg-gray-400' if is_marker else 'bg-gray-300'
+                                with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
+                                        .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
+                                    ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
+                        else:
+                            with ui.element('div').classes('absolute w-full bg-gray-200 flex items-center justify-center') \
+                                    .style(f'top: 0; height: {timeline_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
+                                ui.label('No beats').classes('text-gray-500')
+
+                    # Right column: downbeats
+                    if len(downbeat_times) > 1:
+                        _render_marker_column('flex-1 relative', downbeat_times, timeline_start, timeline_height)
+                    elif len(downbeat_times) == 1:
+                        with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
+                            ui.label(f'{downbeat_times[0]:.2f}s').classes('text-white text-xs absolute') \
+                                .style(f'top: {(downbeat_times[0] - timeline_start) * PX_PER_SEC:.2f}px;')
+                    else:
+                        with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
+                            ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
+
+
+def handle_audio_file(file_path: str, results_container: ui.element):
+    """Handle selected audio file: initialise timeline, detect beats, render."""
+
+    # Step 1: initialise empty timeline for this audio file
+    timeline = _init_timeline(file_path)
+
+    # Step 2: render empty timeline immediately (shows duration, no downbeats yet)
+    _render_timeline_from_state(results_container)
+
+    # Step 3: detect beats and populate downbeats
     try:
         result = detect_beats_and_downbeats(file_path)
 
         if result.get('success'):
-            results_container.clear()
-            with results_container:
-                ui.label('Beat Detection Results').classes('text-lg font-bold text-green-600')
-                ui.separator()
-
-                with ui.row().classes('gap-4'):
-                    with ui.card().classes('w-48 p-2'):
-                        ui.label('Tempo').classes('text-sm text-gray-500')
-                        ui.label(f"{result['tempo']:.1f} BPM").classes('text-2xl font-bold')
-
-                    with ui.card().classes('w-48 p-2'):
-                        ui.label('Total Beats').classes('text-sm text-gray-500')
-                        ui.label(str(result['total_beats'])).classes('text-2xl font-bold')
-
-                    with ui.card().classes('w-48 p-2'):
-                        ui.label('Downbeats').classes('text-sm text-gray-500')
-                        ui.label(str(result['total_downbeats'])).classes('text-2xl font-bold')
-
-                if result.get('downbeats_estimated'):
-                    ui.label('Note: Downbeats are estimated (naive 4/4 time assumption)').classes('text-xs text-gray-400 italic mt-1')
-
-                with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
-                    ui.label('Intervals (Left: Beats, Right: Downbeats)').classes('text-xs text-gray-500 mb-1')
-                    beats = result['beats']
-                    downbeats = sorted(result.get('downbeats', []))
-
-                    if len(beats) > 1:
-                        timeline_start = beats[0]
-                        timeline_end = beats[-1]
-                        total_dur = timeline_end - timeline_start
-                        timeline_height = total_dur * PX_PER_SEC
-
-                        with ui.row().classes('w-full gap-1 flex-nowrap'):
-                            with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
-                                for i in range(len(beats) - 1):
-                                    top = (beats[i] - timeline_start) * PX_PER_SEC
-                                    height = (beats[i + 1] - beats[i]) * PX_PER_SEC
-                                    is_marker = _is_marker_near(beats[i], downbeats)
-                                    bg_class = 'bg-gray-400' if is_marker else 'bg-gray-300'
-                                    with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
-                                            .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
-                                        ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
-
-                            if len(downbeats) > 1:
-                                _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height)
-                            elif len(downbeats) == 1:
-                                with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
-                                    ui.label(f'{downbeats[0]:.2f}s').classes('text-white text-xs absolute') \
-                                        .style(f'top: {(downbeats[0] - timeline_start) * PX_PER_SEC:.2f}px;')
-                            else:
-                                with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
-                                    ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
-
+            # Populate the timeline with beats and downbeats
+            timeline.tempo = result.get('tempo')
+            timeline.beats = result.get('beats', [])
+            timeline.downbeats = [
+                Downbeat(id=i, time=t)
+                for i, t in enumerate(sorted(result.get('downbeats', [])))
+            ]
+            # Re-render with populated downbeats
+            _render_timeline_from_state(results_container)
         else:
             results_container.clear()
             with results_container:
