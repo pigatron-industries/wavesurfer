@@ -132,21 +132,25 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
 
         # Collect all video paths from downbeats and add to library
         for db in timeline.downbeats:
-            if db.path:
-                vid_path = Path(db.path)
-                if vid_path.exists() and str(vid_path) not in {str(v) for v in library_files}:
-                    library_files.append(vid_path)
-                    library_files.sort(key=lambda e: e.name.lower())
+            for path_field in ('path', 'path_outer'):
+                vid_path_str = getattr(db, path_field)
+                if vid_path_str:
+                    vid_path = Path(vid_path_str)
+                    if vid_path.exists() and str(vid_path) not in {str(v) for v in library_files}:
+                        library_files.append(vid_path)
+                        library_files.sort(key=lambda e: e.name.lower())
 
         selected_path_label.set_text(timeline.path)
 
         # Cache thumbnails and durations for assigned videos
         for db in timeline.downbeats:
-            if db.path:
-                if db.path not in thumbnails:
-                    await _cache_thumbnail(db.path, thumbnails)
-                if db.path not in video_durations:
-                    await _cache_video_duration(db.path, video_durations)
+            for path_field in ('path', 'path_outer'):
+                vid_path_str = getattr(db, path_field)
+                if vid_path_str:
+                    if vid_path_str not in thumbnails:
+                        await _cache_thumbnail(vid_path_str, thumbnails)
+                    if vid_path_str not in video_durations:
+                        await _cache_video_duration(vid_path_str, video_durations)
 
         # Render library and timeline
         # We need to access render_library from the closure; handled via the main_page closure
@@ -292,11 +296,16 @@ def main_page():
                         handle_audio_file(audio_paths[0], results_container, thumbnails, video_durations)
                 elif target == 'library':
                     asyncio.create_task(add_paths_to_library(paths))
-                elif target.startswith('downbeat-'):
-                    db_id = int(target.split('-')[1])
+                elif target.startswith('downbeat_outer-'):
+                    db_id = int(target.rsplit('-', 1)[-1])
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
-                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], results_container, thumbnails, video_durations))
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], 'path_outer', results_container, thumbnails, video_durations))
+                elif target.startswith('downbeat-'):
+                    db_id = int(target.rsplit('-', 1)[-1])
+                    video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
+                    if video_paths and state.timeline:
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], 'path', results_container, thumbnails, video_durations))
 
     ui.timer(0.3, poll_native_drops)
 
@@ -355,8 +364,14 @@ def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = M
 
 
 def _render_marker_column(container_classes: str, downbeats: list[Downbeat], timeline_start: float, timeline_height: float,
-                           thumbnails: dict, video_durations: dict, bg_class: str = 'bg-gray-400'):
-    """Render downbeat boxes as drop targets with thumbnail + info."""
+                           thumbnails: dict, video_durations: dict,
+                           path_field: str = 'path', drop_prefix: str = 'downbeat',
+                           bg_class: str = 'bg-gray-400'):
+    """Render downbeat boxes as drop targets with thumbnail + info.
+
+    ``path_field`` selects which path attribute to display ('path' or 'path_outer').
+    ``drop_prefix`` sets the drop target prefix ('downbeat' or 'downbeat_outer').
+    """
     sorted_dbs = sorted(downbeats, key=lambda db: db.time)
     with ui.element('div').classes(container_classes).style(f'height: {timeline_height:.2f}px;'):
         for i in range(len(sorted_dbs) - 1):
@@ -367,10 +382,11 @@ def _render_marker_column(container_classes: str, downbeats: list[Downbeat], tim
             with ui.element('div') \
                     .classes(f'absolute w-full {bg_class} flex items-start gap-1 cursor-pointer') \
                     .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box; padding: 2px;') \
-                    .props('data-drop-target="downbeat-%d"' % db.id):
+                    .props('data-drop-target="%s-%d"' % (drop_prefix, db.id)):
                 # Left: thumbnail or icon
-                if db.path:
-                    thumb = thumbnails.get(db.path)
+                vid_path = getattr(db, path_field)
+                if vid_path:
+                    thumb = thumbnails.get(vid_path)
                     if thumb:
                         ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0 mt-0.5')
                     else:
@@ -379,31 +395,33 @@ def _render_marker_column(container_classes: str, downbeats: list[Downbeat], tim
                 with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
                     ui.label(f'{db.time:.2f}s').classes('font-medium')
                     ui.label(f'Δ {interval:.2f}s')
-                    vid_dur = video_durations.get(db.path) if db.path else None
+                    vid_dur = video_durations.get(vid_path) if vid_path else None
                     if vid_dur is not None:
                         ui.label(f'🎬 {vid_dur:.1f}s')
 
 
 def _render_downbeat_single(db: Downbeat, container_classes: str, timeline_start: float, timeline_height: float,
-                              thumbnails: dict, video_durations: dict):
+                              thumbnails: dict, video_durations: dict,
+                              path_field: str = 'path', drop_prefix: str = 'downbeat'):
     """Render a single downbeat box (when there's only one downbeat)."""
     top = (db.time - timeline_start) * PX_PER_SEC
+    vid_path = getattr(db, path_field)
     with ui.element('div') \
             .classes(f'{container_classes} cursor-pointer') \
             .style(f'height: {timeline_height:.2f}px;') \
-            .props('data-drop-target="downbeat-%d"' % db.id):
+            .props('data-drop-target="%s-%d"' % (drop_prefix, db.id)):
         with ui.element('div') \
                 .classes('flex items-start gap-1 p-1') \
                 .style(f'top: {top:.2f}px; position: absolute;'):
-            if db.path:
-                thumb = thumbnails.get(db.path)
+            if vid_path:
+                thumb = thumbnails.get(vid_path)
                 if thumb:
                     ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0')
                 else:
                     ui.icon('movie').classes('text-white text-sm flex-shrink-0')
             with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
                 ui.label(f'{db.time:.2f}s').classes('font-medium')
-                vid_dur = video_durations.get(db.path) if db.path else None
+                vid_dur = video_durations.get(vid_path) if vid_path else None
                 if vid_dur is not None:
                     ui.label(f'🎬 {vid_dur:.1f}s')
 
@@ -434,11 +452,13 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
 
     # Precompute thumbnails and durations for any downbeat video paths not yet cached.
     for db in downbeats:
-        if db.path:
-            if db.path not in thumbnails:
-                asyncio.create_task(_cache_thumbnail(db.path, thumbnails))
-            if db.path not in video_durations:
-                asyncio.create_task(_cache_video_duration(db.path, video_durations))
+        for path_field in ('path', 'path_outer'):
+            vid_path = getattr(db, path_field)
+            if vid_path:
+                if vid_path not in thumbnails:
+                    asyncio.create_task(_cache_thumbnail(vid_path, thumbnails))
+                if vid_path not in video_durations:
+                    asyncio.create_task(_cache_video_duration(vid_path, video_durations))
 
     results_container.clear()
     with results_container:
@@ -464,7 +484,7 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                 ui.label('Downbeats').classes('text-sm text-gray-500')
                 ui.label(str(len(downbeats))).classes('text-2xl font-bold')
 
-        # Visual timeline — two columns: beats (left), downbeats (right)
+        # Visual timeline — three columns: beats, downbeats, outer downbeats
         if timeline.duration is not None and timeline.duration > 0:
             beats = timeline.beats
             timeline_start = beats[0] if beats else 0.0
@@ -473,7 +493,7 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
             timeline_height = total_dur * PX_PER_SEC
 
             with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
-                ui.label('Intervals (Left: Beats, Right: Downbeats — drop videos on downbeat boxes)').classes('text-xs text-gray-500 mb-1')
+                ui.label('Intervals (Beats | Downbeats | Outer — drop videos on downbeat boxes)').classes('text-xs text-gray-500 mb-1')
 
                 with ui.row().classes('w-full gap-1 flex-nowrap'):
                     # Left column: beats
@@ -493,11 +513,25 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                                     .style(f'top: 0; height: {timeline_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                                 ui.label('No beats').classes('text-gray-500')
 
-                    # Right column: downbeats (drop targets with thumbnails + info)
+                    # Middle column: downbeats (inner)
                     if len(downbeats) > 1:
-                        _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height, thumbnails, video_durations)
+                        _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height,
+                                               thumbnails, video_durations, path_field='path', drop_prefix='downbeat')
                     elif len(downbeats) == 1:
-                        _render_downbeat_single(downbeats[0], 'flex-1 relative', timeline_start, timeline_height, thumbnails, video_durations)
+                        _render_downbeat_single(downbeats[0], 'flex-1 relative', timeline_start, timeline_height,
+                                                thumbnails, video_durations, path_field='path', drop_prefix='downbeat')
+                    else:
+                        with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
+                            ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
+
+                    # Right column: downbeats (outer)
+                    if len(downbeats) > 1:
+                        _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height,
+                                               thumbnails, video_durations, path_field='path_outer', drop_prefix='downbeat_outer',
+                                               bg_class='bg-blue-400')
+                    elif len(downbeats) == 1:
+                        _render_downbeat_single(downbeats[0], 'flex-1 relative', timeline_start, timeline_height,
+                                                thumbnails, video_durations, path_field='path_outer', drop_prefix='downbeat_outer')
                     else:
                         with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                             ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
@@ -513,18 +547,18 @@ async def _cache_video_duration(path: str, video_durations: dict):
     video_durations[path] = await asyncio.to_thread(get_video_duration, path)
 
 
-async def _handle_downbeat_drop(db_id: int, video_path: str, results_container: ui.element,
+async def _handle_downbeat_drop(db_id: int, video_path: str, path_field: str, results_container: ui.element,
                                   thumbnails: dict, video_durations: dict):
     """Associate a video with a downbeat, extract thumbnail + duration, and re-render."""
     if not state.timeline:
         return
     for db in state.timeline.downbeats:
         if db.id == db_id:
-            db.path = video_path
-            if db.path not in thumbnails:
-                await _cache_thumbnail(db.path, thumbnails)
-            if db.path not in video_durations:
-                await _cache_video_duration(db.path, video_durations)
+            setattr(db, path_field, video_path)
+            if video_path not in thumbnails:
+                await _cache_thumbnail(video_path, thumbnails)
+            if video_path not in video_durations:
+                await _cache_video_duration(video_path, video_durations)
             _render_timeline_from_state(results_container, thumbnails, video_durations)
             break
 
