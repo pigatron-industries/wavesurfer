@@ -17,7 +17,7 @@ from ui.native_drop import drop_queue
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
 VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
 
-TIMELINE_HEIGHT_PX = 3800
+PX_PER_SEC = 30  # pixels per second of audio; determines interval box height
 MARKER_MATCH_TOLERANCE = 0.05  # seconds; used to test "is this beat also a downbeat/marker"
 
 
@@ -168,12 +168,12 @@ def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = M
     return any(abs(timestamp - m) < tolerance for m in candidates)
 
 
-def _render_marker_column(container_classes: str, markers: list, timeline_start: float, px_per_sec: float,
+def _render_marker_column(container_classes: str, markers: list, timeline_start: float, timeline_height: float,
                            bg_class: str = 'bg-gray-400', label_fmt=lambda t: f'{t:.2f}s'):
-    with ui.element('div').classes(container_classes).style(f'height: {TIMELINE_HEIGHT_PX}px;'):
+    with ui.element('div').classes(container_classes).style(f'height: {timeline_height:.2f}px;'):
         for i in range(len(markers) - 1):
-            top = (markers[i] - timeline_start) * px_per_sec
-            height = (markers[i + 1] - markers[i]) * px_per_sec
+            top = (markers[i] - timeline_start) * PX_PER_SEC
+            height = (markers[i + 1] - markers[i]) * PX_PER_SEC
             with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
                     .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                 ui.label(label_fmt(markers[i])).classes('text-white text-xs')
@@ -222,13 +222,13 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                         timeline_start = beats[0]
                         timeline_end = beats[-1]
                         total_dur = timeline_end - timeline_start
-                        px_per_sec = TIMELINE_HEIGHT_PX / total_dur if total_dur > 0 else 0
+                        timeline_height = total_dur * PX_PER_SEC
 
                         with ui.row().classes('w-full gap-1 flex-nowrap'):
-                            with ui.element('div').classes('flex-1 relative').style(f'height: {TIMELINE_HEIGHT_PX}px;'):
+                            with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                                 for i in range(len(beats) - 1):
-                                    top = (beats[i] - timeline_start) * px_per_sec
-                                    height = (beats[i + 1] - beats[i]) * px_per_sec
+                                    top = (beats[i] - timeline_start) * PX_PER_SEC
+                                    height = (beats[i + 1] - beats[i]) * PX_PER_SEC
                                     is_marker = _is_marker_near(beats[i], downbeats)
                                     bg_class = 'bg-gray-400' if is_marker else 'bg-gray-300'
                                     with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
@@ -236,13 +236,13 @@ def handle_audio_file(file_path: str, results_container: ui.element):
                                         ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
 
                             if len(downbeats) > 1:
-                                _render_marker_column('flex-1 relative', downbeats, timeline_start, px_per_sec)
+                                _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height)
                             elif len(downbeats) == 1:
-                                with ui.element('div').classes('flex-1 relative').style(f'height: {TIMELINE_HEIGHT_PX}px;'):
+                                with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                                     ui.label(f'{downbeats[0]:.2f}s').classes('text-white text-xs absolute') \
-                                        .style(f'top: {(downbeats[0] - timeline_start) * px_per_sec:.2f}px;')
+                                        .style(f'top: {(downbeats[0] - timeline_start) * PX_PER_SEC:.2f}px;')
                             else:
-                                with ui.element('div').classes('flex-1 relative').style(f'height: {TIMELINE_HEIGHT_PX}px;'):
+                                with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                                     ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
 
         else:
