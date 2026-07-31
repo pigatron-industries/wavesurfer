@@ -4,22 +4,32 @@ Native OS drag-and-drop for pywebview.
 pywebview's DOM API only reports the real filesystem path
 (`pywebviewFullPath`) to Python-side event handlers, and that has to be
 wired up from inside the pywebview process itself via `func`, passed to
-webview.start() through app.native.start_args. Dropped paths cross back to
-the main NiceGUI/uvicorn process over a multiprocessing.Queue.
+webview.start() through app.native.start_args.
 
-`drop_queue` must be created once in the main process and the *same
-object* passed into `setup_native_drop` (via functools.partial in app.py)
-so multiprocessing's Queue pickling reconnects it to the same pipe in the
-child process, instead of each process getting its own independent Queue
-from re-importing this module.
+NiceGUI's native mode runs the pywebview window in a *separate* process
+(spawned in `nicegui.native.native_mode.activate`). On macOS/Windows,
+`multiprocessing`'s "spawn" start method re-executes this app's entry
+script from scratch in that child process, so a plain module-level
+`multiprocessing.Queue()` here would create a second, independent queue
+with its own pipe in each process — they'd never be the same queue, no
+matter what gets passed to `setup_native_drop`.
+
+Instead, dropped paths are sent back to the main NiceGUI/uvicorn process
+over plain HTTP, since that's the one channel already reliably crossing
+the process boundary (the webview window is pointed at that server's
+URL). `drop_queue` is an ordinary in-process `queue.Queue`, filled by the
+`/api/native-drop` endpoint (see api/routes.py) and drained by
+`ui.pages.poll_native_drops` — both of which run in the main process.
 """
 
-import multiprocessing
+import json
+import queue
+import urllib.request
 
-drop_queue: "multiprocessing.Queue" = multiprocessing.Queue()
+drop_queue: "queue.Queue" = queue.Queue()
 
 
-def setup_native_drop(queue: "multiprocessing.Queue") -> None:
+def setup_native_drop(port: int) -> None:
     """Runs inside the pywebview process, right as the GUI loop starts."""
     print('[native_drop] setup_native_drop() called', flush=True)
     import webview
@@ -34,7 +44,16 @@ def setup_native_drop(queue: "multiprocessing.Queue") -> None:
         paths = [f['pywebviewFullPath'] for f in files if f.get('pywebviewFullPath')]
         print(f'[native_drop] drop: {paths}', flush=True)
         if paths:
-            queue.put(paths)
+            body = json.dumps({'paths': paths}).encode()
+            request = urllib.request.Request(
+                f'http://127.0.0.1:{port}/api/native-drop',
+                data=body,
+                headers={'Content-Type': 'application/json'},
+            )
+            try:
+                urllib.request.urlopen(request, timeout=5)
+            except OSError:
+                print('[native_drop] failed to post dropped paths to server', flush=True)
 
     window = webview.windows[0]
     window.dom.document.events.dragenter += DOMEventHandler(on_drag, True, True)
