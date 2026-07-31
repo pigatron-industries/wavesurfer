@@ -8,6 +8,7 @@ from pathlib import Path
 from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder, pick_folder
 from api.beat_detection import detect_beats_and_downbeats
+from api.export_rpp import export_to_rpp
 from api.schema import Downbeat, DownbeatTimeline
 from api import state
 import asyncio
@@ -20,6 +21,7 @@ import librosa
 AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.aiff', '.mp4', '.avi', '.mkv', '.mov', '.webm']
 VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
 JSON_EXTENSIONS = ['.json']
+RPP_EXTENSIONS = ['.rpp']
 
 PX_PER_SEC = 30  # pixels per second of audio; determines interval box height
 MARKER_MATCH_TOLERANCE = 0.05  # seconds; used to test "is this beat also a downbeat/marker"
@@ -134,6 +136,49 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
         ui.notify('Invalid JSON file', color='negative')
     except Exception as e:
         ui.notify(f'Failed to load: {e}', color='negative')
+
+
+async def _export_rpp():
+    """Export the current timeline as a Reaper (.rpp) project file."""
+    if not state.timeline:
+        ui.notify('No timeline to export', color='warning')
+        return
+
+    folder = await pick_folder()
+    if not folder:
+        return
+
+    result: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
+    suggested = Path(state.timeline.path).stem + '.rpp'
+
+    dialog = ui.dialog()
+    with dialog, ui.card().classes('w-[400px] p-4'):
+        ui.label('Export to Reaper').classes('text-base font-medium')
+        ui.label(f'Folder: {Path(folder).name}').classes('text-xs text-gray-500')
+        name_input = ui.input('File name', value=suggested).props('autocomplete=off')
+        with ui.row().classes('justify-end gap-2 mt-2'):
+            ui.button('Cancel', on_click=lambda: finish(None)).props('flat')
+            ui.button('Export', on_click=lambda: finish(
+                str(Path(folder) / (name_input.value if name_input.value else suggested))
+            ))
+
+    def finish(value: str | None):
+        if not result.done():
+            result.set_result(value)
+        dialog.close()
+
+    dialog.on('hide', lambda: finish(None))
+    dialog.open()
+    export_path = await result
+
+    if not export_path:
+        return
+
+    try:
+        export_to_rpp(state.timeline, export_path)
+        ui.notify(f'Exported to {Path(export_path).name}', color='positive')
+    except Exception as e:
+        ui.notify(f'Failed to export: {e}', color='negative')
 
 
 def _scan_videos(folder: Path) -> list[Path]:
@@ -281,8 +326,13 @@ def main_page():
                     selected_path_label.set_text(file_path)
                     handle_audio_file(file_path, results_container, thumbnails, video_durations)
 
+            async def on_export():
+                await _export_rpp()
+
             ui.button(icon='save', on_click=on_save).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Save timeline')
             ui.button(icon='folder_open', on_click=on_load).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Load timeline')
+            ui.button(icon='import_contacts', on_click=on_export).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Export to Reaper')
+            ui.separator().props('vertical').classes('h-6 mx-1')
             ui.button(icon='audiotrack', on_click=on_pick).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0 mr-2')
             selected_path_label = ui.label('Select an audio file to get started').classes('text-sm text-gray-300 truncate max-w-[400px]')
 
