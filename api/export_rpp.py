@@ -3,10 +3,11 @@ Export a DownbeatTimeline to a Reaper (.rpp) project file.
 
 Produces four tracks, in order:
   1. Empty — carries the pre-built video-processor FXCHAIN (see FXCHAIN_1).
-  2. Empty — reserved for later use.
-  3. Video — one item per downbeat that has an assigned video. Downbeat
-     intervals with no assigned video are filled by extending the
-     *previous* video's item to cover the gap, rather than leaving a hole.
+  2. Outer — one item per downbeat that has an assigned ``path_outer``.
+     Feeds the left & right panels of the 3x1 video processor.
+  3. Video — one item per downbeat that has an assigned ``path``.
+     Feeds the center panel. Downbeat intervals with no assigned video
+     are filled by extending the *previous* video's item to cover the gap.
   4. Audio — the source audio, one item spanning the full duration.
 
 Media is linked by absolute path (not copied/embedded), matching how the
@@ -193,14 +194,14 @@ def _audio_item_chunk(timeline: DownbeatTimeline) -> str:
     )
 
 
-def _video_item_chunks(timeline: DownbeatTimeline) -> str:
+def _video_item_chunks(timeline: DownbeatTimeline, path_field: str = 'path') -> str:
     """
-    Build the video items. Walks downbeat intervals in order; a downbeat
-    with no path doesn't get its own item — instead the previous video's
-    item is extended to cover that interval too, so there's never a gap
-    once at least one video has been assigned. A leading gap (no video
-    assigned yet at all) is left empty, since there's nothing to extend
-    backwards from.
+    Build the video items for a given path field ('path' or 'path_outer').
+    Walks downbeat intervals in order; a downbeat with no path doesn't get
+    its own item — instead the previous video's item is extended to cover
+    that interval too, so there's never a gap once at least one video has
+    been assigned. A leading gap (no video assigned yet at all) is left
+    empty, since there's nothing to extend backwards from.
     """
     duration = timeline.duration or 0.0
     downbeats = sorted(timeline.downbeats, key=lambda db: db.time)
@@ -211,8 +212,9 @@ def _video_item_chunks(timeline: DownbeatTimeline) -> str:
     items: list[dict] = []  # each: {position, end, path}
     for i, db in enumerate(downbeats):
         interval_end = bounds[i + 1]
-        if db.path:
-            items.append({'position': db.time, 'end': interval_end, 'path': db.path})
+        vid_path = getattr(db, path_field)
+        if vid_path:
+            items.append({'position': db.time, 'end': interval_end, 'path': vid_path})
         elif items:
             # No video for this interval — extend the previous item to cover it.
             items[-1]['end'] = interval_end
@@ -248,14 +250,14 @@ def _marker_lines(timeline: DownbeatTimeline) -> str:
 def export_to_rpp(timeline: DownbeatTimeline, output_path: str) -> None:
     """
     Write ``timeline`` to ``output_path`` as a Reaper project file with four
-    tracks (FX-processor / placeholder / video / audio). Media is linked by
-    absolute path, not copied or embedded.
+    tracks (FX-processor / outer-video / inner-video / audio). Media is
+    linked by absolute path, not copied or embedded.
     """
     tempo_line = f'  TEMPO {timeline.tempo:.4f} 4 4\n' if timeline.tempo else ''
 
     track1 = _track_chunk(name='Video FX', fx_chunk=FXCHAIN_1)
-    track2 = _track_chunk(name='(empty)')
-    track3 = _track_chunk(name='Video', item_chunks=_video_item_chunks(timeline))
+    track2 = _track_chunk(name='Outer', item_chunks=_video_item_chunks(timeline, 'path_outer'))
+    track3 = _track_chunk(name='Video', item_chunks=_video_item_chunks(timeline, 'path'))
     track4 = _track_chunk(name=f'{Path(timeline.path).stem} (audio)',
                            item_chunks=_audio_item_chunk(timeline))
 

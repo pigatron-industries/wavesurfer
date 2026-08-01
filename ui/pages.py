@@ -83,13 +83,13 @@ def _timeline_from_dict(data: dict) -> DownbeatTimeline:
 
 
 async def _save_timeline(library_files: list[Path], thumbnails: dict, video_durations: dict,
-                          results_container: ui.element):
+                          results_container: ui.element, current_json_name: dict):
     """Save the current timeline state as a JSON file."""
     if not state.timeline:
         ui.notify('No timeline to save', color='warning')
         return
 
-    suggested = Path(state.timeline.path).stem + '.json'
+    suggested = current_json_name['value'] or (Path(state.timeline.path).stem + '.json')
     save_path = await pick_path(
         start_path=_last_folder(),
         mode='file',
@@ -100,6 +100,7 @@ async def _save_timeline(library_files: list[Path], thumbnails: dict, video_dura
         return
 
     _set_last_folder(str(Path(save_path).parent))
+    current_json_name['value'] = Path(save_path).name
 
     try:
         data = _timeline_to_dict(state.timeline)
@@ -111,7 +112,7 @@ async def _save_timeline(library_files: list[Path], thumbnails: dict, video_dura
 
 async def _load_timeline(library_files: list[Path], thumbnails: dict, video_durations: dict,
                           results_container: ui.element, add_paths_to_library,
-                          selected_path_label, active_path):
+                          selected_path_label, active_path, current_json_name: dict):
     """Load a timeline state from a JSON file."""
     json_file = await pick_file(start_path=_last_folder(), extensions=JSON_EXTENSIONS)
     if not json_file:
@@ -155,6 +156,7 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
         # Render library and timeline
         # We need to access render_library from the closure; handled via the main_page closure
         _render_timeline_from_state(results_container, thumbnails, video_durations)
+        current_json_name['value'] = Path(json_file).name
         ui.notify(f'Loaded {Path(json_file).name}', color='positive')
 
     except json.JSONDecodeError:
@@ -210,6 +212,7 @@ def main_page():
     thumbnails: dict[str, str | None] = {}   # str(path) -> data URL, or None if extraction failed
     video_durations: dict[str, float | None] = {}  # str(path) -> duration in seconds
     active_path = {'value': None}
+    current_json_name = {'value': None}  # filename last loaded from / saved to
 
     def select_library_file(path: Path):
         active_path['value'] = str(path)
@@ -325,12 +328,12 @@ def main_page():
             .props('data-drop-target="audio"'):
         with ui.row().classes('gap-4 items-center'):
             async def on_save():
-                await _save_timeline(library_files, thumbnails, video_durations, results_container)
+                await _save_timeline(library_files, thumbnails, video_durations, results_container, current_json_name)
 
             async def on_load():
                 await _load_timeline(library_files, thumbnails, video_durations,
                                      results_container, add_paths_to_library,
-                                     selected_path_label, active_path)
+                                     selected_path_label, active_path, current_json_name)
                 render_library()
 
             async def on_pick():
