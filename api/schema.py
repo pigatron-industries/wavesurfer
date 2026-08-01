@@ -9,9 +9,15 @@ class Downbeat(BaseModel):
     path_outer: Optional[str] = None  # Second video file path (outer column)
 
 
+class Section(BaseModel):
+    start: float
+    end: float
+
+
 class DownbeatTimeline(BaseModel):
     path: str  # Audio file path
     beats: list[float] = []
     downbeats: list[Downbeat] = []
+    sections: list[Section] = []
     tempo: Optional[float] = None
     duration: Optional[float] = None
