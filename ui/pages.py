@@ -8,9 +8,9 @@ from pathlib import Path
 from urllib.parse import quote
 from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder, pick_path
-from api.beat_detection import detect_beats_and_downbeats
+from api.beat_detection import detect_beats_and_downbeats, detect_sections
 from api.export_rpp import export_to_rpp
-from api.schema import Downbeat, DownbeatTimeline
+from api.schema import Downbeat, DownbeatTimeline, Section
 from api import state
 import asyncio
 import json
@@ -74,10 +74,12 @@ def _timeline_to_dict(timeline: DownbeatTimeline) -> dict:
 def _timeline_from_dict(data: dict) -> DownbeatTimeline:
     """Deserialize a dict (from JSON) into a DownbeatTimeline."""
     downbeats = [Downbeat(**db) for db in data.get('downbeats', [])]
+    sections = [Section(**s) for s in data.get('sections', [])]
     return DownbeatTimeline(
         path=data['path'],
         beats=data.get('beats', []),
         downbeats=downbeats,
+        sections=sections,
         tempo=data.get('tempo'),
         duration=data.get('duration'),
     )
@@ -462,7 +464,9 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
             timeline_height = total_dur * PX_PER_SEC
 
             with ui.card().classes('w-full p-2 mt-2 overflow-y-auto'):
-                ui.label('Intervals (Beats | Downbeats | Outer — drop videos on downbeat boxes)').classes('text-xs text-gray-500 mb-1')
+                ui.label('Beats | Downbeats | Outer | Sections — drop videos on downbeat boxes').classes('text-xs text-gray-500 mb-1')
+
+                sections = timeline.sections
 
                 with ui.row().classes('w-full gap-1 flex-nowrap'):
                     # Left column: beats
@@ -509,6 +513,28 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                     else:
                         with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                             ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
+
+                    # Far right column: sections
+                    section_colors = [
+                        'bg-amber-200', 'bg-emerald-200', 'bg-sky-200',
+                        'bg-violet-200', 'bg-rose-200', 'bg-yellow-200',
+                        'bg-lime-200', 'bg-indigo-200', 'bg-orange-200',
+                        'bg-teal-200', 'bg-pink-200', 'bg-cyan-200',
+                    ]
+                    with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
+                        if sections:
+                            for idx, sec in enumerate(sections):
+                                top = (sec.start - timeline_start) * PX_PER_SEC
+                                height = (sec.end - sec.start) * PX_PER_SEC
+                                color = section_colors[idx % len(section_colors)]
+                                with ui.element('div').classes(f'absolute w-full {color} flex items-start gap-1') \
+                                        .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box; padding: 2px;'):
+                                    _play_button(sec.start, sec.end)
+                                    with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
+                                        ui.label(f'{sec.start:.2f}s').classes('font-medium')
+                                        ui.label(f'Δ {(sec.end - sec.start):.2f}s')
+                        else:
+                            ui.label('No sections').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
 
 
 async def _cache_thumbnail(path: str, thumbnails: dict):
@@ -564,6 +590,11 @@ def handle_audio_file(file_path: str, results_container: ui.element, thumbnails:
                 Downbeat(id=i, time=t)
                 for i, t in enumerate(sorted(result.get('downbeats', [])))
             ]
+
+            # Step 4: detect structural sections
+            section_dicts = detect_sections(file_path)
+            timeline.sections = [Section(**s) for s in section_dicts]
+
             # Re-render with populated downbeats
             _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
         else:
