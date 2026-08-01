@@ -236,12 +236,12 @@ def main_page():
                     db_id = int(target.rsplit('-', 1)[-1])
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
-                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], 'path_outer', results_container, thumbnails, video_durations))
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path_outer', results_container, thumbnails, video_durations))
                 elif target.startswith('downbeat-'):
                     db_id = int(target.rsplit('-', 1)[-1])
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
-                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths[0], 'path', results_container, thumbnails, video_durations))
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path', results_container, thumbnails, video_durations))
 
     ui.timer(0.3, poll_native_drops)
 
@@ -471,20 +471,25 @@ async def _cache_video_duration(path: str, video_durations: dict):
     video_durations[path] = await asyncio.to_thread(get_video_duration, path)
 
 
-async def _handle_downbeat_drop(db_id: int, video_path: str, path_field: str, results_container: ui.element,
+async def _handle_downbeat_drop(db_id: int, video_paths: list[str], path_field: str, results_container: ui.element,
                                   thumbnails: dict, video_durations: dict):
-    """Associate a video with a downbeat, extract thumbnail + duration, and re-render."""
+    """Associate one or more videos with consecutive downbeats starting at db_id, then re-render."""
     if not state.timeline:
         return
-    for db in state.timeline.downbeats:
-        if db.id == db_id:
-            setattr(db, path_field, video_path)
-            if video_path not in thumbnails:
-                await _cache_thumbnail(video_path, thumbnails)
-            if video_path not in video_durations:
-                await _cache_video_duration(video_path, video_durations)
-            _render_timeline_from_state(results_container, thumbnails, video_durations)
+    sorted_dbs = sorted(state.timeline.downbeats, key=lambda db: db.id)
+    start_idx = next((i for i, db in enumerate(sorted_dbs) if db.id == db_id), None)
+    if start_idx is None:
+        return
+    for j, video_path in enumerate(video_paths):
+        db_idx = start_idx + j
+        if db_idx >= len(sorted_dbs):
             break
+        setattr(sorted_dbs[db_idx], path_field, video_path)
+        if video_path not in thumbnails:
+            asyncio.create_task(_cache_thumbnail(video_path, thumbnails))
+        if video_path not in video_durations:
+            asyncio.create_task(_cache_video_duration(video_path, video_durations))
+    _render_timeline_from_state(results_container, thumbnails, video_durations)
 
 
 def handle_audio_file(file_path: str, results_container: ui.element, thumbnails: dict, video_durations: dict):
