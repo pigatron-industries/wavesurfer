@@ -5,6 +5,7 @@ Add your UI elements here.
 
 from bisect import bisect_left
 from pathlib import Path
+from urllib.parse import quote
 from nicegui import ui
 from ui.path_picker import pick_file, pick_file_or_folder, pick_path
 from api.beat_detection import detect_beats_and_downbeats
@@ -111,8 +112,9 @@ async def _save_timeline(library_files: list[Path], thumbnails: dict, video_dura
 
 
 async def _load_timeline(library_files: list[Path], thumbnails: dict, video_durations: dict,
-                          results_container: ui.element, 
-                          selected_path_label, active_path, current_json_name: dict):
+                          results_container: ui.element,
+                          selected_path_label, active_path, current_json_name: dict,
+                          audio_player: ui.audio):
     """Load a timeline state from a JSON file."""
     json_file = await pick_file(start_path=_last_folder(), extensions=JSON_EXTENSIONS)
     if not json_file:
@@ -155,7 +157,7 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
 
         # Render library and timeline
         # We need to access render_library from the closure; handled via the main_page closure
-        _render_timeline_from_state(results_container, thumbnails, video_durations)
+        _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
         current_json_name['value'] = Path(json_file).name
         ui.notify(f'Loaded {Path(json_file).name}', color='positive')
 
@@ -217,6 +219,30 @@ def main_page():
     active_path = {'value': None}
     current_json_name = {'value': None}  # filename last loaded from / saved to
 
+    # Hidden <audio> element used to play back segments of the loaded audio
+    # file. Its `src` is set/refreshed whenever the timeline (re)renders.
+    audio_player = ui.audio('').props('id=main-audio').classes('hidden')
+
+    ui.add_body_html('''
+    <script>
+    function playSegment(start, end) {
+        const audio = document.getElementById('main-audio');
+        if (!audio) return;
+        audio.currentTime = start;
+        audio.play();
+        if (end !== null && end !== undefined) {
+            const onTick = () => {
+                if (audio.currentTime >= end) {
+                    audio.pause();
+                    audio.removeEventListener('timeupdate', onTick);
+                }
+            };
+            audio.addEventListener('timeupdate', onTick);
+        }
+    }
+    </script>
+    ''')
+
     def poll_native_drops() -> None:
         while True:
             try:
@@ -231,17 +257,17 @@ def main_page():
                     audio_paths = [p for p in paths if Path(p).suffix.lower() in AUDIO_EXTENSIONS]
                     if audio_paths:
                         selected_path_label.set_text(audio_paths[0])
-                        handle_audio_file(audio_paths[0], results_container, thumbnails, video_durations)
+                        handle_audio_file(audio_paths[0], results_container, thumbnails, video_durations, audio_player)
                 elif target.startswith('downbeat_outer-'):
                     db_id = int(target.rsplit('-', 1)[-1])
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
-                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path_outer', results_container, thumbnails, video_durations))
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path_outer', results_container, thumbnails, video_durations, audio_player))
                 elif target.startswith('downbeat-'):
                     db_id = int(target.rsplit('-', 1)[-1])
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
-                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path', results_container, thumbnails, video_durations))
+                        asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path', results_container, thumbnails, video_durations, audio_player))
 
     ui.timer(0.3, poll_native_drops)
 
@@ -254,15 +280,16 @@ def main_page():
 
             async def on_load():
                 await _load_timeline(library_files, thumbnails, video_durations,
-                                     results_container, 
-                                     selected_path_label, active_path, current_json_name)
+                                     results_container,
+                                     selected_path_label, active_path, current_json_name,
+                                     audio_player)
 
             async def on_pick():
                 file_path = await pick_file(start_path=_audio_folder(), extensions=AUDIO_EXTENSIONS)
                 if file_path:
                     _set_audio_folder(str(Path(file_path).parent))
                     selected_path_label.set_text(file_path)
-                    handle_audio_file(file_path, results_container, thumbnails, video_durations)
+                    handle_audio_file(file_path, results_container, thumbnails, video_durations, audio_player)
 
             async def on_export():
                 await _export_rpp(current_json_name)
@@ -287,8 +314,19 @@ def _is_marker_near(timestamp: float, sorted_markers: list, tolerance: float = M
     return any(abs(timestamp - m) < tolerance for m in candidates)
 
 
+def _play_button(start: float, end: float | None = None):
+    """Small overlay button that plays [start, end) of the loaded audio.
+
+    ``end=None`` plays from ``start`` to the natural end of the file.
+    """
+    end_arg = 'null' if end is None else f'{end:.6f}'
+    ui.button(icon='play_arrow', on_click=lambda: ui.run_javascript(
+        f'playSegment({start:.6f}, {end_arg})'
+    )).props('flat dense round size=xs color=white').classes('absolute top-0 right-0 z-10')
+
+
 def _render_marker_column(container_classes: str, downbeats: list[Downbeat], timeline_start: float, timeline_height: float,
-                           thumbnails: dict, video_durations: dict,
+                           thumbnails: dict, video_durations: dict, audio_player: ui.audio,
                            path_field: str = 'path', drop_prefix: str = 'downbeat',
                            bg_class: str = 'bg-gray-400'):
     """Render downbeat boxes as drop targets with thumbnail + info.
@@ -307,6 +345,7 @@ def _render_marker_column(container_classes: str, downbeats: list[Downbeat], tim
                     .classes(f'absolute w-full {bg_class} flex items-start gap-1 cursor-pointer') \
                     .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box; padding: 2px;') \
                     .props('data-drop-target="%s-%d"' % (drop_prefix, db.id)):
+                _play_button(db.time, sorted_dbs[i + 1].time)
                 # Left: thumbnail or icon
                 vid_path = getattr(db, path_field)
                 if vid_path:
@@ -325,7 +364,7 @@ def _render_marker_column(container_classes: str, downbeats: list[Downbeat], tim
 
 
 def _render_downbeat_single(db: Downbeat, container_classes: str, timeline_start: float, timeline_height: float,
-                              thumbnails: dict, video_durations: dict,
+                              thumbnails: dict, video_durations: dict, audio_player: ui.audio,
                               path_field: str = 'path', drop_prefix: str = 'downbeat'):
     """Render a single downbeat box (when there's only one downbeat)."""
     top = (db.time - timeline_start) * PX_PER_SEC
@@ -334,6 +373,8 @@ def _render_downbeat_single(db: Downbeat, container_classes: str, timeline_start
             .classes(f'{container_classes} cursor-pointer') \
             .style(f'height: {timeline_height:.2f}px;') \
             .props('data-drop-target="%s-%d"' % (drop_prefix, db.id)):
+        end = state.timeline.duration if state.timeline else None
+        _play_button(db.time, end)
         with ui.element('div') \
                 .classes('flex items-start gap-1 p-1') \
                 .style(f'top: {top:.2f}px; position: absolute;'):
@@ -363,7 +404,8 @@ def _init_timeline(file_path: str) -> DownbeatTimeline:
     return timeline
 
 
-def _render_timeline_from_state(results_container: ui.element, thumbnails: dict, video_durations: dict):
+def _render_timeline_from_state(results_container: ui.element, thumbnails: dict, video_durations: dict,
+                                 audio_player: ui.audio):
     """Render the UI based on the current state.timeline object."""
     timeline = state.timeline
     if not timeline:
@@ -371,6 +413,9 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
         with results_container:
             ui.label('No audio loaded').classes('text-gray-500')
         return
+
+    # Point the hidden <audio> element at the currently loaded file.
+    audio_player.set_source(f'/api/audio?path={quote(timeline.path)}')
 
     downbeats = timeline.downbeats
 
@@ -432,6 +477,7 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                                 with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
                                         .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                                     ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
+                                    # _play_button(beats[i], beats[i + 1])
                         else:
                             with ui.element('div').classes('absolute w-full bg-gray-200 flex items-center justify-center') \
                                     .style(f'top: 0; height: {timeline_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
@@ -440,10 +486,12 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                     # Middle column: downbeats (inner)
                     if len(downbeats) > 1:
                         _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height,
-                                               thumbnails, video_durations, path_field='path', drop_prefix='downbeat')
+                                               thumbnails, video_durations, audio_player,
+                                               path_field='path', drop_prefix='downbeat')
                     elif len(downbeats) == 1:
                         _render_downbeat_single(downbeats[0], 'flex-1 relative', timeline_start, timeline_height,
-                                                thumbnails, video_durations, path_field='path', drop_prefix='downbeat')
+                                                thumbnails, video_durations, audio_player,
+                                                path_field='path', drop_prefix='downbeat')
                     else:
                         with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                             ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
@@ -451,11 +499,13 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                     # Right column: downbeats (outer)
                     if len(downbeats) > 1:
                         _render_marker_column('flex-1 relative', downbeats, timeline_start, timeline_height,
-                                               thumbnails, video_durations, path_field='path_outer', drop_prefix='downbeat_outer',
+                                               thumbnails, video_durations, audio_player,
+                                               path_field='path_outer', drop_prefix='downbeat_outer',
                                                bg_class='bg-blue-400')
                     elif len(downbeats) == 1:
                         _render_downbeat_single(downbeats[0], 'flex-1 relative', timeline_start, timeline_height,
-                                                thumbnails, video_durations, path_field='path_outer', drop_prefix='downbeat_outer')
+                                                thumbnails, video_durations, audio_player,
+                                                path_field='path_outer', drop_prefix='downbeat_outer')
                     else:
                         with ui.element('div').classes('flex-1 relative').style(f'height: {timeline_height:.2f}px;'):
                             ui.label('No downbeats').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
@@ -472,7 +522,7 @@ async def _cache_video_duration(path: str, video_durations: dict):
 
 
 async def _handle_downbeat_drop(db_id: int, video_paths: list[str], path_field: str, results_container: ui.element,
-                                  thumbnails: dict, video_durations: dict):
+                                  thumbnails: dict, video_durations: dict, audio_player: ui.audio):
     """Associate one or more videos with consecutive downbeats starting at db_id, then re-render."""
     if not state.timeline:
         return
@@ -489,17 +539,18 @@ async def _handle_downbeat_drop(db_id: int, video_paths: list[str], path_field: 
             asyncio.create_task(_cache_thumbnail(video_path, thumbnails))
         if video_path not in video_durations:
             asyncio.create_task(_cache_video_duration(video_path, video_durations))
-    _render_timeline_from_state(results_container, thumbnails, video_durations)
+    _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
 
 
-def handle_audio_file(file_path: str, results_container: ui.element, thumbnails: dict, video_durations: dict):
+def handle_audio_file(file_path: str, results_container: ui.element, thumbnails: dict, video_durations: dict,
+                       audio_player: ui.audio):
     """Handle selected audio file: initialise timeline, detect beats, render."""
 
     # Step 1: initialise empty timeline for this audio file
     timeline = _init_timeline(file_path)
 
     # Step 2: render empty timeline immediately (shows duration, no downbeats yet)
-    _render_timeline_from_state(results_container, thumbnails, video_durations)
+    _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
 
     # Step 3: detect beats and populate downbeats
     try:
@@ -514,7 +565,7 @@ def handle_audio_file(file_path: str, results_container: ui.element, thumbnails:
                 for i, t in enumerate(sorted(result.get('downbeats', [])))
             ]
             # Re-render with populated downbeats
-            _render_timeline_from_state(results_container, thumbnails, video_durations)
+            _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
         else:
             results_container.clear()
             with results_container:

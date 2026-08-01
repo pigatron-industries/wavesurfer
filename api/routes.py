@@ -3,15 +3,21 @@ API routes for the backend.
 Add your API endpoints here.
 """
 
-from fastapi import Request
+from pathlib import Path
+from fastapi import Request, HTTPException
+from fastapi.responses import FileResponse
 from nicegui import app
 from ui.native_drop import drop_queue
 
 
-@app.get('/api/health')
-def health_check():
-    """Health check endpoint."""
-    return {'status': 'ok'}
+@app.get('/api/audio')
+def serve_audio(path: str):
+    """Stream a local audio file so the browser <audio> element can play it.
+    Starlette's FileResponse supports Range requests, so seeking works."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail='File not found')
+    return FileResponse(file_path)
 
 
 @app.post('/api/native-drop')
