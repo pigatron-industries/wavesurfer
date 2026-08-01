@@ -37,6 +37,23 @@ def setup_native_drop(port: int) -> None:
 
     window = webview.windows[0]
 
+    # Guarantee preventDefault() fires on every dragover, with no Python
+    # round trip. Without this, the HTML5 DnD contract can go unsatisfied
+    # between debounced Python callbacks, and a fast drop can fall through
+    # to the browser's default behavior (e.g. navigating the webview to the
+    # dropped file), which looks like the whole app resetting.
+    window.evaluate_js(
+        "if (!window.__nativeDropGuard) {"
+        "  window.__nativeDropGuard = true;"
+        "  document.addEventListener('dragover', function(e) {"
+        "    e.preventDefault();"
+        "  }, true);"
+        "  document.addEventListener('drop', function(e) {"
+        "    e.preventDefault();"
+        "  }, true);"
+        "}"
+    )
+
     # Collect all drop targets upfront so we can check containment in JS later.
     drop_target_ids = window.evaluate_js(
         "Array.from(document.querySelectorAll('[data-drop-target]'))."
@@ -73,6 +90,7 @@ def setup_native_drop(port: int) -> None:
             print(f'[native_drag] {e["type"]} fired (no drop target, ignoring)', flush=True)
 
     def on_drop(e):
+        print(f'[native_drop] drop fired', flush=True)
         target_type = _find_drop_target_for_event(e)
         if target_type:
             files = e.get('dataTransfer', {}).get('files', [])
@@ -92,7 +110,7 @@ def setup_native_drop(port: int) -> None:
         else:
             print('[native_drop] drop outside drop target, ignoring', flush=True)
 
-    window.dom.document.events.dragenter += DOMEventHandler(on_drag, True, True)
-    window.dom.document.events.dragover += DOMEventHandler(on_drag, True, True, debounce=500)
+    # window.dom.document.events.dragenter += DOMEventHandler(on_drag, True, True)
+    # window.dom.document.events.dragover += DOMEventHandler(on_drag, True, True, debounce=500)
     window.dom.document.events.drop += DOMEventHandler(on_drop, True, True)
     print('[native_drop] DOM events bound (scoped via JS containment check)', flush=True)
