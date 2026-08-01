@@ -47,3 +47,25 @@ def detect_beats_and_downbeats(audio_file_path: str) -> dict:
             'beats': [],
             'downbeats': []
         }
+
+
+def detect_sections(audio_file_path: str) -> list[dict]:
+    """
+    Detect structural sections (verse, chorus, bridge, etc.) using
+    librosa's hierarchical segmentation on chroma features.
+
+    Returns a list of dicts with ``start`` and ``end`` keys (seconds).
+    """
+    try:
+        y, sr = librosa.load(audio_file_path, sr=22050)
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+        boundaries = librosa.segment.agglomerative(chroma, k=12)
+        bound_times = librosa.frames_to_time(boundaries, sr=sr).tolist()
+
+        sections = []
+        for i in range(len(bound_times) - 1):
+            sections.append({'start': bound_times[i], 'end': bound_times[i + 1]})
+        return sections
+    except Exception as e:
+        logger.error(f"Error detecting sections: {str(e)}")
+        return []
