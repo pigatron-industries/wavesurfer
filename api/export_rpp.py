@@ -255,14 +255,15 @@ def export_to_rpp(timeline: DownbeatTimeline, output_path: str) -> None:
     """
     tempo_line = f'  TEMPO {timeline.tempo:.4f} 4 4\n' if timeline.tempo else ''
 
-    track1 = _track_chunk(name='Video FX', fx_chunk=FXCHAIN_1)
-    track2 = _track_chunk(name='Outer', item_chunks=_video_item_chunks(timeline, 'path_outer'))
-    track3 = _track_chunk(name='Video', item_chunks=_video_item_chunks(timeline, 'path'))
-    track4 = _track_chunk(name=f'{Path(timeline.path).stem} (audio)',
+    track1 = _track_chunk(name=f'{Path(timeline.path).stem} (audio)',
                            item_chunks=_audio_item_chunk(timeline))
+    track2 = _track_chunk(name='Video', item_chunks=_video_item_chunks(timeline, 'path'))
+    track3 = _track_chunk(name='Outer', item_chunks=_video_item_chunks(timeline, 'path_outer'))
+    track4 = _track_chunk(name='Video FX', fx_chunk=FXCHAIN_1)
 
     project = (
         '<REAPER_PROJECT 0.1 "6.0" 0\n'
+        '  VIDEO_CONFIG 1920 1080 0\n'
         f'{tempo_line}'
         f'{_marker_lines(timeline)}'
         f'{track1}'

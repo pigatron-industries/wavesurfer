@@ -165,13 +165,16 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
         ui.notify(f'Failed to load: {e}', color='negative')
 
 
-async def _export_rpp():
+async def _export_rpp(current_json_name: dict):
     """Export the current timeline as a Reaper (.rpp) project file."""
     if not state.timeline:
         ui.notify('No timeline to export', color='warning')
         return
 
-    suggested = Path(state.timeline.path).stem + '.rpp'
+    if current_json_name['value']:
+        suggested = Path(current_json_name['value']).stem + '.rpp'
+    else:
+        suggested = Path(state.timeline.path).stem + '.rpp'
     export_path = await pick_path(
         start_path=_last_folder(),
         mode='file',
@@ -262,7 +265,7 @@ def main_page():
                     handle_audio_file(file_path, results_container, thumbnails, video_durations)
 
             async def on_export():
-                await _export_rpp()
+                await _export_rpp(current_json_name)
 
             ui.button(icon='audiotrack', on_click=on_pick).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0 mr-2')
             ui.button(icon='folder_open', on_click=on_load).classes('bg-gray-600 hover:bg-gray-500 flex-shrink-0').tooltip('Load timeline')
