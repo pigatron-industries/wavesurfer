@@ -10,16 +10,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-# Load .env (auto-export every assignment).
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-else
-  echo "warning: .env not found — using built-in defaults" >&2
-fi
-
 # Prefer the project virtualenv if present.
 if [[ -x .venv/bin/python ]]; then
   PYTHON=.venv/bin/python
