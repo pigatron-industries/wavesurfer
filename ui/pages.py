@@ -353,9 +353,9 @@ def _render_marker_column(container_classes: str, downbeats: list[Downbeat], tim
                 if vid_path:
                     thumb = thumbnails.get(vid_path)
                     if thumb:
-                        ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0 mt-0.5')
+                        ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0 mt-0.5').tooltip(vid_path)
                     else:
-                        ui.icon('movie').classes('text-white text-sm flex-shrink-0 mt-0.5')
+                        ui.icon('movie').classes('text-white text-sm flex-shrink-0 mt-0.5').tooltip(vid_path)
                 # Right: info column
                 with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
                     ui.label(f'{db.time:.2f}s').classes('font-medium')
@@ -383,9 +383,9 @@ def _render_downbeat_single(db: Downbeat, container_classes: str, timeline_start
             if vid_path:
                 thumb = thumbnails.get(vid_path)
                 if thumb:
-                    ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0')
+                    ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0').tooltip(vid_path)
                 else:
-                    ui.icon('movie').classes('text-white text-sm flex-shrink-0')
+                    ui.icon('movie').classes('text-white text-sm flex-shrink-0').tooltip(vid_path)
             with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
                 ui.label(f'{db.time:.2f}s').classes('font-medium')
                 vid_dur = video_durations.get(vid_path) if vid_path else None
