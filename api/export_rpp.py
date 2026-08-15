@@ -60,7 +60,7 @@ FXCHAIN_1 = r'''<FXCHAIN
           |// If a track has no video, that panel is filled with black.
           |
           |//@param1:flip_side 'Flip side' 0 0 1 0.5 1
-          |//@param2:center_width 'Center width' 0.3333 0.05 0.9 0.3333 0.01
+          |//@param2:center_width 'Center width' 0.3333 0.05 1.0 0.3333 0.01
           |//@param3:enable_mirror 'Mirror' 1 0 1 0.5 1
           |
           |cellh = project_h;
@@ -259,7 +259,7 @@ def export_to_rpp(timeline: DownbeatTimeline, output_path: str) -> None:
 
     track1 = _track_chunk(name=f'{Path(timeline.path).stem} (audio)',
                            item_chunks=_audio_item_chunk(timeline))
-    track2 = _track_chunk(name='Video', item_chunks=_video_item_chunks(timeline, 'path'))
+    track2 = _track_chunk(name='Inner', item_chunks=_video_item_chunks(timeline, 'path'))
     track3 = _track_chunk(name='Outer', item_chunks=_video_item_chunks(timeline, 'path_outer'))
     track4 = _track_chunk(name='Video FX', fx_chunk=FXCHAIN_1)
 
