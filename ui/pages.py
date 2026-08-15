@@ -271,6 +271,11 @@ def main_page():
                     video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
                     if video_paths and state.timeline:
                         asyncio.create_task(_handle_downbeat_drop(db_id, video_paths, 'path', results_container, thumbnails, video_durations, audio_player))
+                elif target.startswith('section-'):
+                    sec_idx = int(target.rsplit('-', 1)[-1])
+                    video_paths = [p for p in paths if Path(p).suffix.lower() in VIDEO_EXTENSIONS]
+                    if video_paths and state.timeline:
+                        asyncio.create_task(_handle_section_drop(sec_idx, video_paths, results_container, thumbnails, video_durations, audio_player))
 
     ui.timer(0.3, poll_native_drops)
 
@@ -432,6 +437,14 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                 if vid_path not in video_durations:
                     asyncio.create_task(_cache_video_duration(vid_path, video_durations))
 
+    # Same for section-assigned videos.
+    for sec in timeline.sections:
+        if sec.path:
+            if sec.path not in thumbnails:
+                asyncio.create_task(_cache_thumbnail(sec.path, thumbnails))
+            if sec.path not in video_durations:
+                asyncio.create_task(_cache_video_duration(sec.path, video_durations))
+
     results_container.clear()
     with results_container:
         ui.label(f'Audio: {Path(timeline.path).name}').classes('text-lg font-bold')
@@ -528,12 +541,24 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                                 top = (sec.start - timeline_start) * PX_PER_SEC
                                 height = (sec.end - sec.start) * PX_PER_SEC
                                 color = section_colors[idx % len(section_colors)]
-                                with ui.element('div').classes(f'absolute w-full {color} flex items-start gap-1') \
-                                        .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box; padding: 2px;'):
+                                with ui.element('div').classes(f'absolute w-full {color} flex items-start gap-1 cursor-pointer') \
+                                        .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box; padding: 2px;') \
+                                        .props('data-drop-target="section-%d"' % idx):
                                     _play_button(sec.start, sec.end)
+                                    # Left: thumbnail or icon for the assigned video
+                                    sec_vid_path = sec.path
+                                    if sec_vid_path:
+                                        thumb = thumbnails.get(sec_vid_path)
+                                        if thumb:
+                                            ui.image(thumb).classes('w-8 h-8 object-cover rounded flex-shrink-0 mt-0.5').tooltip(sec_vid_path)
+                                        else:
+                                            ui.icon('movie').classes('text-white text-sm flex-shrink-0 mt-0.5').tooltip(sec_vid_path)
                                     with ui.column().classes('gap-0 text-[10px] text-white leading-tight'):
                                         ui.label(f'{sec.start:.2f}s').classes('font-medium')
                                         ui.label(f'Δ {(sec.end - sec.start):.2f}s')
+                                        sec_vid_dur = video_durations.get(sec_vid_path) if sec_vid_path else None
+                                        if sec_vid_dur is not None:
+                                            ui.label(f'🎬 {sec_vid_dur:.1f}s')
                         else:
                             ui.label('No sections').classes('text-gray-500 absolute inset-0 flex items-center justify-center')
 
@@ -563,6 +588,27 @@ async def _handle_downbeat_drop(db_id: int, video_paths: list[str], path_field: 
         if db_idx >= len(sorted_dbs):
             break
         setattr(sorted_dbs[db_idx], path_field, video_path)
+        if video_path not in thumbnails:
+            asyncio.create_task(_cache_thumbnail(video_path, thumbnails))
+        if video_path not in video_durations:
+            asyncio.create_task(_cache_video_duration(video_path, video_durations))
+    _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
+
+
+async def _handle_section_drop(sec_idx: int, video_paths: list[str], results_container: ui.element,
+                               thumbnails: dict, video_durations: dict, audio_player: ui.audio):
+    """Associate one or more videos with consecutive sections starting at sec_idx, then re-render."""
+    if not state.timeline:
+        return
+    sections = state.timeline.sections
+    if sec_idx >= len(sections):
+        return
+    random.shuffle(video_paths)
+    for j, video_path in enumerate(video_paths):
+        idx = sec_idx + j
+        if idx >= len(sections):
+            break
+        sections[idx].path = video_path
         if video_path not in thumbnails:
             asyncio.create_task(_cache_thumbnail(video_path, thumbnails))
         if video_path not in video_durations:

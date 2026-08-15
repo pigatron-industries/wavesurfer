@@ -12,6 +12,7 @@ class Downbeat(BaseModel):
 class Section(BaseModel):
     start: float
     end: float
+    path: Optional[str] = None  # Video file path associated with section
 
 
 class DownbeatTimeline(BaseModel):
