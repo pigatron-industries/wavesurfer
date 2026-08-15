@@ -158,6 +158,10 @@ async def _load_timeline(library_files: list[Path], thumbnails: dict, video_dura
                     if vid_path_str not in video_durations:
                         await _cache_video_duration(vid_path_str, video_durations)
 
+        # Add an end section covering the tail of the file (for timelines saved
+        # before that behavior existed).
+        _ensure_end_section(timeline)
+
         # Render library and timeline
         # We need to access render_library from the closure; handled via the main_page closure
         _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
@@ -473,7 +477,8 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
         if timeline.duration is not None and timeline.duration > 0:
             beats = timeline.beats
             timeline_start = beats[0] if beats else 0.0
-            timeline_end = beats[-1] if beats else timeline.duration
+            # Span the full file so there's room for end boxes after the last beat/section.
+            timeline_end = max(beats[-1] if beats else 0.0, timeline.duration)
             total_dur = timeline_end - timeline_start
             timeline_height = total_dur * PX_PER_SEC
 
@@ -496,6 +501,15 @@ def _render_timeline_from_state(results_container: ui.element, thumbnails: dict,
                                         .style(f'top: {top:.2f}px; height: {height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
                                     ui.label(f'{beats[i]:.2f}s').classes('text-white text-xs')
                                     # _play_button(beats[i], beats[i + 1])
+                            # End box: from the last beat to the end of the file
+                            if timeline.duration > beats[-1]:
+                                end_top = (beats[-1] - timeline_start) * PX_PER_SEC
+                                end_height = (timeline.duration - beats[-1]) * PX_PER_SEC
+                                is_marker = _is_marker_near(beats[-1], downbeat_times)
+                                bg_class = 'bg-gray-400' if is_marker else 'bg-gray-300'
+                                with ui.element('div').classes(f'absolute w-full {bg_class} flex items-center justify-center') \
+                                        .style(f'top: {end_top:.2f}px; height: {end_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
+                                    ui.label(f'{beats[-1]:.2f}s').classes('text-white text-xs')
                         else:
                             with ui.element('div').classes('absolute w-full bg-gray-200 flex items-center justify-center') \
                                     .style(f'top: 0; height: {timeline_height:.2f}px; border: 1px solid black; box-sizing: border-box;'):
@@ -616,6 +630,19 @@ async def _handle_section_drop(sec_idx: int, video_paths: list[str], results_con
     _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
 
 
+def _ensure_end_section(timeline: DownbeatTimeline) -> None:
+    """Add a final section covering the gap from the last section to the end of the file.
+
+    No-op when there's no duration, no sections yet, or the last section already
+    reaches the end (so it's safe to call repeatedly, e.g. on load).
+    """
+    if timeline.duration is None or not timeline.sections:
+        return
+    last_end = max(s.end for s in timeline.sections)
+    if timeline.duration > last_end:
+        timeline.sections.append(Section(start=last_end, end=timeline.duration))
+
+
 def handle_audio_file(file_path: str, results_container: ui.element, thumbnails: dict, video_durations: dict,
                        audio_player: ui.audio):
     """Handle selected audio file: initialise timeline, detect beats, render."""
@@ -642,6 +669,9 @@ def handle_audio_file(file_path: str, results_container: ui.element, thumbnails:
             # Step 4: detect structural sections
             section_dicts = detect_sections(file_path)
             timeline.sections = [Section(**s) for s in section_dicts]
+
+            # Add an end section covering the tail of the file (last section -> end).
+            _ensure_end_section(timeline)
 
             # Re-render with populated downbeats
             _render_timeline_from_state(results_container, thumbnails, video_durations, audio_player)
