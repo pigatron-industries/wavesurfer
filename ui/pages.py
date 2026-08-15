@@ -15,6 +15,7 @@ from api import state
 import asyncio
 import json
 import queue
+import random
 from api.thumbnails import get_thumbnail_data_url, get_video_duration
 from ui.native_drop import drop_queue
 import librosa
@@ -556,6 +557,7 @@ async def _handle_downbeat_drop(db_id: int, video_paths: list[str], path_field: 
     start_idx = next((i for i, db in enumerate(sorted_dbs) if db.id == db_id), None)
     if start_idx is None:
         return
+    random.shuffle(video_paths)
     for j, video_path in enumerate(video_paths):
         db_idx = start_idx + j
         if db_idx >= len(sorted_dbs):
