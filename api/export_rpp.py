@@ -153,16 +153,17 @@ def _esc(name: str) -> str:
 
 
 def _item_chunk(*, position: float, length: float, name: str, file_path: str,
-                 source_type: str, indent: str, extra: str = None) -> str:
+                 source_type: str, indent: str, mute: bool = False, extra: str = None) -> str:
     """Build a single <ITEM> chunk with a linked (non-embedded) media source."""
     inner = indent + '  '
+    audio_line = f"{inner}  AUDIO 0\"\n" if mute else ""
     return (
         f'{indent}<ITEM\n'
         f'{inner}POSITION {position:.6f}\n'
         f'{inner}LENGTH {length:.6f}\n'
         f'{inner}NAME "{_esc(name)}"\n'
         f'{inner}<SOURCE {source_type}\n'
-        # f'{inner}  {extra}\n' if extra else ''
+        f"{audio_line}"
         f'{inner}  FILE "{_esc(file_path)}"\n'
         f'{inner}>\n'
         f'{indent}>\n'
@@ -229,6 +230,7 @@ def _video_item_chunks(timeline: DownbeatTimeline, path_field: str = 'path') -> 
             name=Path(item['path']).name,
             file_path=item['path'],
             source_type=source_type,
+            mute=True,
             indent='    ',
         ))
 
